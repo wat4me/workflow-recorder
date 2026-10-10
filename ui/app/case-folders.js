@@ -1,5 +1,6 @@
 /** Folder tree, menus and move dialog for the saved-case library. */
 import { iconSvg } from "../lib/icons.js";
+import { applyFolderColor } from "../lib/folder-colors.js";
 export function attachFolders(ctx) {
   const {
     t, MESSAGE, sendRuntimeMessage, confirmAction, notify, promptText, reportError,
@@ -16,6 +17,21 @@ export function attachFolders(ctx) {
 
   function folderName(folderId) {
     return ctx.folders.find(folder => folder.id === folderId)?.name || t("unfiledCases", [], "未分类");
+  }
+  function folderAncestors(folderId) {
+    const ancestors = [];
+    const visited = new Set();
+    let folder = ctx.folders.find(item => item.id === folderId);
+    while (folder && !visited.has(folder.id)) {
+      ancestors.unshift(folder);
+      visited.add(folder.id);
+      folder = ctx.folders.find(item => item.id === folder.parentId);
+    }
+    return ancestors;
+  }
+  function folderPath(folderId) {
+    return folderAncestors(folderId).map(folder => folder.name).join(" / ")
+      || t("unfiledCases", [], "未分类");
   }
   function descendantIds(folderId) {
     const result = new Set([folderId]);
@@ -203,8 +219,9 @@ export function attachFolders(ctx) {
     const row = document.createElement("div");
     row.className = `case-folder-row${removable ? " is-removable" : ""}`;
     row.dataset.folderId = id;
+    applyFolderColor(row, depth);
     row.dataset.depth = depth;
-    row.style.setProperty("--folder-indent", `${Math.max(0, depth - 1) * 14}px`);
+    row.style.setProperty("--folder-indent", `${Math.max(0, depth - 1) * 20}px`);
 
     const button = document.createElement("button");
     button.type = "button";
@@ -349,7 +366,7 @@ export function attachFolders(ctx) {
         row.className = "move-folder-row";
         row.dataset.folderId = folderId || "unfiled";
         row.dataset.depth = depth;
-        row.style.setProperty("--folder-indent", `${Math.max(0, depth - 1) * 16}px`);
+        row.style.setProperty("--folder-indent", `${Math.max(0, depth - 1) * 20}px`);
         const choice = document.createElement("button");
         choice.type = "button";
         choice.className = "move-folder-choice";
@@ -413,7 +430,7 @@ export function attachFolders(ctx) {
   }
 
   Object.assign(ctx, {
-    folderName, descendantIds, flattenedFolders, updateFolderVisibility, addFolderToggle,
+    folderName, folderPath, folderAncestors, descendantIds, flattenedFolders, updateFolderVisibility, addFolderToggle,
     expandFolderAncestors, folderMoveTargets, updateFolder, closeFolderMenu, showFolderMenu,
     createFolder, buildFolderItem, renderFolders, showMoveDialog
   });

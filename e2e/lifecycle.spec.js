@@ -284,6 +284,33 @@ test("folder trees collapse independently without changing selections or move ta
   const toggle = (container, id) => row(container, id).locator(".folder-toggle");
   assert.equal(await toggle(sidebar, "leaf").count(), 0);
   assert.equal(await toggle(sidebar, "unfiled").count(), 0);
+  await row(sidebar, "root").locator(".case-folder-button").click();
+  const subfolders = page.locator("#case-library-list");
+  assert.equal(await subfolders.isVisible(), true, "folders remain visible even without cases");
+  assert.equal(await page.locator("#case-library-select-all").isDisabled(), true);
+  assert.equal(await subfolders.locator(".subfolder-card").count(), 2);
+  assert.equal(await subfolders.locator('[data-subfolder-id="leaf"]').count(), 0, "only direct children are listed");
+  await subfolders.locator('[data-subfolder-id="child"] .subfolder-more').click();
+  assert.equal(await page.locator('.folder-menu [role="menuitem"]').count(), 3);
+  await page.keyboard.press("Escape");
+  await subfolders.locator('[data-subfolder-id="child"] .subfolder-open').click();
+  assert.equal(await subfolders.locator(".subfolder-card").count(), 1);
+  await subfolders.locator('[data-subfolder-id="leaf"] .subfolder-open').click();
+  assert.equal(await subfolders.locator(".subfolder-card").count(), 0);
+  assert.equal(await row(sidebar, "leaf").locator(".case-folder-button").evaluate(button => button.classList.contains("is-active")), true);
+  const breadcrumb = page.locator("#library-location-title");
+  assert.equal(await breadcrumb.innerText(), "Root / Child / Leaf");
+  assert.equal(await breadcrumb.locator('[aria-current="location"]').innerText(), "Leaf");
+  await breadcrumb.locator('button[data-folder-id="child"]').click();
+  assert.equal(await breadcrumb.innerText(), "Root / Child");
+  assert.equal(await subfolders.locator('[data-subfolder-id="leaf"]').count(), 1);
+  await breadcrumb.locator('button[data-folder-id="root"]').focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await breadcrumb.innerText(), "Root");
+  assert.equal(await breadcrumb.locator("button").count(), 0);
+  assert.equal(await row(sidebar, "root").locator(".case-folder-button").evaluate(button => button.classList.contains("is-active")), true);
+  await page.locator("#all-cases-btn").click();
+  assert.equal(await subfolders.locator(".subfolder-card").count(), 0);
   await page.locator("#case-library-select-all").check();
   const selected = await page.locator("#case-selection-count").innerText();
 
@@ -328,6 +355,13 @@ test("folder trees collapse independently without changing selections or move ta
   assert.equal(await row(sidebar, "leaf").isHidden(), true, "dialog expansion does not expand the sidebar");
   await row(sidebar, "root").locator(".case-folder-button").click();
   assert.equal(await page.locator(".library-item").count(), 2, "parent filter still includes collapsed descendants");
+  assert.ok((await page.locator('[data-case-id="folder-case-1"] .library-item-info > span').innerText()).endsWith(" · Root / Child / Leaf"), "nested case metadata includes the complete folder path");
+  assert.equal(await subfolders.locator(":scope > :first-child").getAttribute("data-subfolder-id"), "child", "folders precede cases in the shared list");
+  assert.equal(await subfolders.locator(".library-folder-item input[type=checkbox]").count(), 0, "batch selection excludes folders");
+  assert.equal(await subfolders.locator(".library-folder-item .library-item-symbol").count(), 2);
+
+  const leafColor = await row(sidebar, "leaf").locator(".case-folder-button > svg").evaluate(el => getComputedStyle(el).color);
+  assert.equal(await page.locator('[data-case-id="folder-case-1"] .case-folder-label[data-folder-id="leaf"]').evaluate(el => getComputedStyle(el).color), leafColor, "sidebar and case folder colors agree");
 
   // Single-case moving reveals its current destination even if its parents were collapsed.
   await page.locator('[data-case-id="folder-case-1"] .library-item-btn.move').click();
@@ -486,6 +520,108 @@ test("folders can be renamed and moved by menu or drag without changing their ca
   assert.deepEqual(errors, []);
 });
 
+test("side-panel saving selects nested folders and rejects a folder deleted while the dialog is open", async (t) => {
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN" }));
+  await writeActions(worker, [{ id: "filed-step", type: "click", timestamp: 1, pageName: "page1",
+    target: { tagName: "button", accessibleName: "Confirm" } }]);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.addInitScript(() => {
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
+    chrome.runtime.sendMessage = (request, ...rest) => {
+      if (globalThis.simulateLegacySave && request?.action === "saveCase") {
+        request = { ...request };
+        delete request.folderId;
+      }
+      return send(request, ...rest);
+    };
+  });
+  await page.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await page.locator(".step-card").waitFor();
+  const send = request => page.evaluate(request => chrome.runtime.sendMessage(request), request);
+  const root = await send({ action: "createCaseFolder", name: "流程分类" });
+  const child = await send({ action: "createCaseFolder", name: "登录", parentId: root.folder.id });
+  const leaf = await send({ action: "createCaseFolder", name: "提交", parentId: child.folder.id });
+  const temporary = await send({ action: "createCaseFolder", name: "临时分类" });
+  const workbench = await context.newPage();
+  await workbench.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/console.html`);
+  await workbench.locator('[data-folder-id="unfiled"] .case-folder-button').click();
+  const save = page.locator("#save-current-case-btn");
+  const select = page.locator(".save-case-folder");
+  await save.click();
+  assert.equal(await select.locator('[aria-checked="true"]').getAttribute("data-folder-id"), "");
+  assert.equal(await select.locator(`[data-folder-id="${child.folder.id}"]`).getAttribute("title"), "流程分类 / 登录");
+  const leafRow = select.locator(`[data-folder-id="${leaf.folder.id}"]`);
+  assert.equal(await leafRow.getAttribute("title"), "流程分类 / 登录 / 提交");
+  await leafRow.click();
+  await leafRow.press("ArrowUp");
+  await select.locator(`[data-folder-id="${child.folder.id}"]`).press("Enter");
+  assert.equal(await page.locator(".prompt-text-dialog").isVisible(), true);
+  assert.equal(await select.locator('[aria-checked="true"]').getAttribute("data-folder-id"), child.folder.id);
+  await page.locator(".prompt-text-dialog input").fill("分类用例");
+  await select.locator(`[data-folder-id="${child.folder.id}"]`).click();
+  await page.setViewportSize({ width: 300, height: 650 });
+  const fits = await page.locator(".prompt-text-dialog").evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    const field = el.querySelector(".folder-picker").getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= innerWidth && field.right <= rect.right;
+  });
+  assert.equal(fits, true);
+  await page.locator(".confirm-submit").click();
+  await page.waitForFunction(() => document.querySelector("#save-current-case-btn").classList.contains("success"));
+  const saved = await send({ action: "listCases" });
+  assert.equal(saved.cases.length, 1);
+  assert.equal(saved.cases[0].folderId, child.folder.id);
+  assert.equal(await workbench.locator(".library-item").count(), 0, "classified save stays out of Unfiled");
+  await workbench.locator(`[data-folder-id="${root.folder.id}"] .case-folder-button`).click();
+  await workbench.locator(".library-item").waitFor();
+  assert.ok((await workbench.locator(".library-item").innerText()).includes("分类用例"));
+
+  await page.evaluate(() => RecorderI18n.setLanguage("en"));
+  await save.click();
+  assert.equal(await select.locator('[aria-checked="true"]').getAttribute("data-folder-id"), child.folder.id);
+  assert.equal(await select.locator(".folder-picker-name").first().innerText(), "Unfiled");
+  await page.locator(".confirm-cancel").click();
+  assert.equal((await send({ action: "listCases" })).cases.length, 1);
+
+  await save.click();
+  await select.locator(`[data-folder-id="${temporary.folder.id}"]`).click();
+  assert.equal((await send({ action: "deleteCaseFolder", folderId: temporary.folder.id })).success, true);
+  await page.locator(".confirm-submit").click();
+  await page.locator(".recorder-toast.danger").waitFor();
+  assert.equal((await send({ action: "listCases" })).cases.length, 1);
+  assert.equal(await save.isEnabled(), true);
+  await save.click();
+  await select.locator('[data-folder-id=""]').click();
+  await page.locator(".confirm-submit").click();
+  await page.waitForFunction(async () => (await chrome.runtime.sendMessage({ action: "listCases" })).cases.length === 2);
+  assert.equal((await send({ action: "listCases" })).cases.filter(item => item.folderId === null).length, 1);
+  // Model a stale background save route that drops the new classification argument.
+  await page.evaluate(() => { globalThis.simulateLegacySave = true; });
+  await save.click();
+  await select.locator(`[data-folder-id="${child.folder.id}"]`).click();
+  await page.locator(".prompt-text-dialog input").fill("旧后台分类用例");
+  await page.locator(".confirm-submit").click();
+  await waitForCondition(async () => (await send({action:"listCases"})).cases.some(item =>
+    item.name === "旧后台分类用例" && item.folderId === child.folder.id), "legacy save classification corrected");
+  await workbench.locator(`[data-folder-id="${root.folder.id}"] .case-folder-button`).click();
+  await workbench.waitForFunction(() => document.querySelectorAll(".library-item").length === 2);
+  await workbench.locator('[data-folder-id="unfiled"] .case-folder-button').click();
+  assert.equal(await workbench.locator(".library-item").count(), 1, "only the explicitly unfiled save appears here");
+  await workbench.reload();
+  await workbench.locator(`[data-folder-id="${root.folder.id}"] .case-folder-button`).click();
+  assert.equal(await workbench.locator(".library-item").count(), 2, "classification persists across reload");
+  assert.deepEqual(errors, []);
+});
+
 test("public workbench organizes file actions and keeps Bridge records hidden", async (t) => {
   const extensionPath = path.resolve(__dirname, "..");
   const context = await chromium.launchPersistentContext("", {
@@ -570,7 +706,11 @@ test("public workbench organizes file actions and keeps Bridge records hidden", 
   const folder = (await worker.evaluate(() => chrome.storage.local.get("caseFolders")))
     .caseFolders.find(item => item.name === "Public folder");
   assert.equal(folder.parentId, null);
-  await page.locator("#case-search-scope").selectOption("all");
+  assert.equal(await page.locator("#library-location-title").innerText(), "Public folder");
+  await page.locator("#all-cases-btn").click();
+  assert.equal(await page.locator("#case-library-count").count(), 1);
+  assert.equal(await page.locator("#library-location-title").innerText(), "全部用例");
+  assert.equal(await page.locator("#library-location-meta").innerText(), "2 个用例");
   await page.waitForFunction(() => document.querySelectorAll(".library-item").length === 2);
   for (const selector of ["#batch-export-cases-btn", "#export-case-package-btn", "#batch-delete-cases-btn"]) {
     assert.equal(await page.locator(selector).isDisabled(), true);
@@ -1001,6 +1141,28 @@ test("recording download fits the toolbar and works as text or an icon", async (
   await download.waitFor({ state: "hidden" });
   await panel.setViewportSize({ width: 1000, height: 720 });
   assert.equal(await more.isHidden(), true);
+  // Starting a different workspace must not reuse the previous download name.
+  await worker.evaluate(() => chrome.storage.local.set({ activeCaseId: null, workspaceOrigin: null }));
+  await writeActions(worker, [{ id:"another-workspace-step",timestamp:2,type:"click",pageName:"page1",
+    target:{tagName:"button",accessibleName:"Another workspace"} }]);
+  await panel.setViewportSize({width:360,height:720});
+  await download.waitFor({state:"visible"});
+  await download.click();
+  await panel.locator(".prompt-text-dialog input").waitFor();
+  assert.equal(await panel.locator(".prompt-text-dialog input").inputValue(), "");
+  await panel.locator(".prompt-text-dialog input").fill("new-workspace");
+  const newDownload = panel.waitForEvent("download");
+  await panel.locator(".prompt-text-dialog .confirm-submit").click();
+  assert.equal((await newDownload).suggestedFilename(), "new-workspace.zip");
+
+  // Loading a saved case after that uses the saved case's name, including after reload.
+  const savedCase = (await readCases(worker)).find(item=>item.name==="responsive-download");
+  await panel.evaluate(id=>chrome.runtime.sendMessage({action:"loadCase",caseId:id}),savedCase.id);
+  await panel.reload();
+  await download.waitFor({state:"visible"});
+  const loadedDownload = panel.waitForEvent("download");
+  await download.click();
+  assert.equal((await loadedDownload).suggestedFilename(), "responsive-download.zip");
   assert.deepEqual(errors, []);
 });
 

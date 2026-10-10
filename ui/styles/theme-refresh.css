@@ -6,7 +6,7 @@ body { background: var(--bg-secondary); color: var(--text-primary); font-family:
 .app-container svg[stroke="currentColor"], .console-container svg[stroke="currentColor"] { stroke-width: var(--icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .app-header { background: #fff; box-shadow: 0 1px 0 var(--border-color); }
 .app-main { background: transparent; }
-.console-panel, .case-library-panel, .preview-panel, .execution-records-panel {
+.console-panel, .case-library-panel, .preview-panel {
   background: #fff;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -44,10 +44,8 @@ body { background: var(--bg-secondary); color: var(--text-primary); font-family:
 .empty-icon { opacity: 1; color: var(--accent-color); padding: 14px; background: var(--accent-light); border-radius: 16px; }
 .empty-state p { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .empty-state > span { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
-.preview-readonly-tag { color: var(--text-muted); }
 
 /* Sidebar: one content surface, clear field labels and a compact toolbar. */
-.ai-sidebar { padding: 16px; box-shadow: var(--shadow-xs); }
 .ai-sidebar h2 { font-size: 17px; letter-spacing: -.02em; }
 .ai-sidebar.is-idle #ai-sidebar-status { color: var(--text-muted); }
 #ai-explore-form label { color: var(--text-primary); font-size: 13px; margin-top: 16px; }
@@ -72,9 +70,7 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-co
 
 @media (prefers-reduced-motion: no-preference) {
   .btn, .icon-btn, input, select, textarea { transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease, color .16s ease, transform .12s ease; }
-  .execution-panel:not([hidden]) { animation: panel-enter .18s ease-out; }
 }
-@keyframes panel-enter { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @media (max-width: 700px) {
   .workbench-header { padding-inline: 12px; }
   .library-head { padding-block: 12px; }
@@ -82,5 +78,5 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-co
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  button:enabled:active, .execution-record:hover { transform: none; }
+  button:enabled:active { transform: none; }
 }

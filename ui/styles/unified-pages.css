@@ -1,5 +1,5 @@
 /* Page-specific adapters to the shared design tokens. Layout ownership stays
-   with each page; visual roles are shared even inside the AI iframe. */
+   with each page; visual roles are shared across the recorder and case library. */
 /* Page-level primary. `.start-state` is excluded so the side panel's start/continue
    recording button keeps the green identity controls.css gives it -- it is a session
    action, not a page primary, and accent purple would put it level with "copy to AI". */
@@ -17,19 +17,8 @@
 }
 :is(input, select, textarea):focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
 .case-search-field input:focus-visible { outline: none; }
-.panel-head h2, .execution-panel > h2, .task-heading h2 { font-size: 20px; font-weight: 600; line-height: 1.4; }
-.panel-head .library-subtitle, .agent-mode-hint, .agent-progress,
-.execution-record-meta, .execution-record-summary { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
-.execution-record-status, .agent-status, .preview-readonly-tag { font-size: 11px; font-weight: 600; }
-.execution-record-heading code { font-size: 11px; color: var(--text-muted); }
-.agent-panel, .execution-record-list, .agent-records { background: var(--bg-secondary); }
-.agent-provider-field, .agent-followup label { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.agent-kicker { font-size: 11px; letter-spacing: .04em; }
-.agent-status:is([data-state="running"], [data-state="validating"], [data-state="awaiting-input"], [data-state="cancelling"]) {
-  color: var(--accent-color); background: var(--accent-light); border-color: var(--accent-subtle);
-}
-.execution-record:is(.execution-record-running, .execution-record-awaiting-input, .execution-record-validating, .execution-record-ready, .execution-record-cancelling) .execution-record-marker { background: var(--accent-color); }
-.execution-record:is(.execution-record-running, .execution-record-awaiting-input, .execution-record-validating, .execution-record-ready, .execution-record-cancelling) .execution-record-status { color: var(--accent-color); background: var(--accent-light); }
+.panel-head h2 { font-size: 20px; font-weight: 600; line-height: 1.4; }
+.panel-head .library-subtitle { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
 .lc-viewport { background-color: var(--bg-secondary); background-image: radial-gradient(var(--border-hover) .75px, transparent .75px); background-size: 20px 20px; }
 .lc-frame-label, .lc-thumb-note { color: var(--text-muted); }
 .lc-thumb { background: var(--bg-primary); box-shadow: var(--shadow-xs); }
@@ -42,48 +31,7 @@
 .confirm-actions .confirm-submit.danger { background: var(--danger-color); border-color: var(--danger-color); color: #fff; }
 .confirm-actions .confirm-submit.danger:hover { background: var(--danger-hover); }
 .confirm-icon:not(.danger) { color: var(--accent-color); background: var(--accent-light); }
-.recording-name-field span { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.recording-name-field > span { color: var(--text-primary); font-size: 13px; font-weight: 600; }
 .recorder-toast-stack { position: fixed; top: 16px; left: 12px; right: 12px; z-index: 2147483647; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
 .recorder-toast { pointer-events: auto; width: fit-content; max-width: min(520px, calc(100vw - 24px)); padding: 10px 14px; border-radius: var(--radius-md); border: 1px solid var(--success-border); background: var(--success-light); color: var(--success-text); font: 500 13px/1.5 var(--font-ui); box-shadow: var(--shadow-lg); overflow-wrap: anywhere; }
 .recorder-toast.danger { background: var(--danger-light); border-color: var(--danger-border); color: var(--danger-color); }
-
-/* AI workbench: same white surface, rail and controls as the case library. */
-.ai-layout { background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); }
-.embedded .ai-layout { border: 0; border-radius: 0; }
-.panel-nav { background: var(--bg-secondary); border-radius: var(--radius-lg) 0 0 0; }
-.panel-nav button { color: var(--text-secondary); font-size: 13px; }
-.panel-nav button[aria-selected="true"] { background: var(--accent-light); color: var(--accent-color); border-color: var(--accent-subtle); }
-.ai-content { background: var(--bg-primary); border-color: var(--border-color); border-radius: 0 var(--radius-lg) var(--radius-lg) 0; }
-.execution-panel { max-width: 1160px; }
-.execution-panel label:not(.check) { color: var(--text-primary); font-size: 13px; font-weight: 600; }
-.execution-panel label > :is(input, select, textarea) { margin-top: 6px; }
-.execution-panel .check { font-weight: 400; line-height: 1.6; }
-.execution-panel :is(button, input, select, textarea) { border-radius: var(--radius-sm); }
-.execution-panel button, .current-run button { font-size: 13px; font-weight: 600; min-height: 34px; }
-.execution-panel :is(input, select, textarea) { border-color: var(--border-hover); }
-.execution-panel :is(input, select, textarea):disabled { background: var(--bg-secondary); color: var(--text-muted); }
-.execution-panel button:hover:not(:disabled), .current-run button:hover:not(:disabled) { border-color: var(--accent-color); color: var(--accent-color); background: var(--accent-light); box-shadow: var(--shadow-xs); }
-.execution-panel .primary, .current-run .primary { color: #fff; background: var(--accent-color); border-color: var(--accent-color); }
-.execution-panel .primary:hover:not(:disabled), .current-run .primary:hover:not(:disabled) { color: #fff; background: var(--accent-hover); border-color: var(--accent-hover); }
-.execution-panel .danger { color: var(--danger-color); background: var(--danger-light); border-color: var(--danger-border); }
-.execution-panel .danger:hover:not(:disabled) { color: var(--danger-hover); background: var(--danger-subtle); border-color: var(--danger-color); }
-.execution-panel .text-button { color: var(--accent-color); background: transparent; border: 0; }
-.execution-panel .text-button:hover:not(:disabled) { box-shadow: none; }
-.task-selectors .target-row :is(#tabs, #refresh-cases, #open-target) { color: var(--accent-color); background: var(--accent-light); border-color: var(--accent-subtle); }
-.execution-panel > p[data-i18n], .execution-panel details > p[data-i18n], #tools > p, #review > p, #handoff-sharing { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
-.execution-panel pre { padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-secondary); font-family: var(--font-code); }
-.execution-panel pre:empty { display: none; }
-.execution-panel details > summary { color: var(--text-secondary); font-size: 13px; font-weight: 600; }
-.execution-panel details > summary:hover { color: var(--accent-color); }
-.scope, .handoff { border-left-color: var(--accent-color); }
-.task-heading { border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 12px; }
-.current-run { background: var(--accent-light); border-bottom-color: var(--accent-subtle); padding: 12px 14px; border-radius: var(--radius-md); margin-top: 12px; }
-.panel-card { box-shadow: var(--shadow-xs); }
-#preflight-status { font-size: 12px; font-weight: 500; }
-.execution-panel #status, #review-status { color: var(--text-secondary); }
-#model-test-result { margin-top: 10px; min-height: 2.4em; }
-.execution-panel .frames img { border-radius: var(--radius-sm); border-color: var(--border-color); }
-@media (max-width: 700px) {
-  .panel-nav button { font-size: 12px; }
-  .execution-panel button { overflow-wrap: anywhere; }
-}

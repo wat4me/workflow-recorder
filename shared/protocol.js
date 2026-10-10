@@ -10,7 +10,6 @@
   if (globalThis.WorkflowRecorderProtocol) return;
 
   /** @typedef {{ action: string, [key: string]: unknown }} RuntimeMessage */
-  /** @typedef {{ jobId: string, status: string, updatedAt?: number }} AgentJob */
 
   const MESSAGE = Object.freeze({
     setSidePanelLayout: "setSidePanelLayout",
@@ -52,38 +51,8 @@
     waitForPageStable: "waitForPageStable",
     cancelPageStableWait: "cancelPageStableWait",
     waitForClickEffect: "waitForClickEffect",
-    primeScreencastFrame: "primeScreencastFrame",
-
-    agentConnect: "agentConnect",
-    agentCreateJob: "agentCreateJob",
-    agentUploadChunk: "agentUploadChunk",
-    agentCommitAndStart: "agentCommitAndStart",
-    agentFollowup: "agentFollowup",
-    agentCancel: "agentCancel",
-    agentQuery: "agentQuery",
-    agentListJobs: "agentListJobs",
-    agentJobUpdated: "agentJobUpdated"
+    primeScreencastFrame: "primeScreencastFrame"
   });
-
-  const AGENT_STATUS = Object.freeze({
-    awaitingInput: "awaiting-input",
-    validating: "validating",
-    ready: "ready",
-    running: "running",
-    cancelling: "cancelling",
-    completed: "completed",
-    failed: "failed",
-    cancelled: "cancelled",
-    timedOut: "timed-out"
-  });
-
-  const ACTIVE_AGENT_STATUSES = new Set([
-    AGENT_STATUS.awaitingInput,
-    AGENT_STATUS.validating,
-    AGENT_STATUS.ready,
-    AGENT_STATUS.running,
-    AGENT_STATUS.cancelling
-  ]);
 
   /**
    * Why a click produced no step.
@@ -126,10 +95,7 @@
 
   globalThis.WorkflowRecorderProtocol = Object.freeze({
     MESSAGE,
-    AGENT_STATUS,
-    ACTIVE_AGENT_STATUSES,
     CLICK_SKIP_REASON,
-    isAgentActive: status => ACTIVE_AGENT_STATUSES.has(status),
     reportClickSkipped
   });
 })();

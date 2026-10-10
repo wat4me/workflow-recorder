@@ -33,6 +33,7 @@
     // on the page. Remembering the answer is what lets exporting and copying an
     // already-named workspace stay a single click.
     let caseName = "";
+    let workspaceNameKey = "";
     // Kept so a capture-progress change can repaint the status tags without
     // re-reading every step: capture state is published several times per
     // screenshot, and each read is a message plus a lookup per stored step.
@@ -111,9 +112,18 @@
 
     async function refreshState() {
       const [stored, actions] = await Promise.all([
-        chrome.storage.local.get(["isRecording", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY]),
+        chrome.storage.local.get(["isRecording", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY]),
         readActions()
       ]);
+      // Names belong to a workspace, not the lifetime of this side-panel page.
+      // The origin survives edits; root recordings are identified by their first step.
+      const origin = stored.workspaceOrigin;
+      const nameKey = actions.length === 0 ? "" : origin?.caseId
+        ? JSON.stringify([origin.caseId, origin.loadedAt]) : actions[0].id;
+      if (nameKey !== workspaceNameKey) {
+        workspaceNameKey = nameKey;
+        caseName = actions.length ? origin?.caseNameSnapshot || "" : "";
+      }
       isRecording = !!stored.isRecording;
       // Read on the same round trip as the rest of the panel state: this decides
       // whether the screenshot actions are offered at all.
@@ -276,24 +286,81 @@
       });
 
       saveCurrentCaseBtn.addEventListener("click", async () => {
-        const name = await askCaseName({
-          title: t("saveCaseAction", [], "保存用例"),
-          message: t("saveCaseHint", [], "保存后可在工作台查看全部用例。"),
-          confirmText: t("save", [], "保存")
-        });
-        if (name === null) return;
-
+        if (saveCurrentCaseBtn.disabled) return;
         saveCurrentCaseBtn.disabled = true;
-        const response = await sendRuntimeMessage({ action: MESSAGE.saveCase, name, snapshot: isRecording });
-        if (response?.success) {
-          // The worker generates a name when this one is empty and files the case
-          // under that, so remember what it actually used.
-          caseName = response.case?.name || caseName;
-          flashSaved();
-        } else {
-          reportError(response?.error || t("saveCaseFailed", [], "保存用例失败"));
+        try {
+          const [folderResponse, caseResponse, workspace] = await Promise.all([
+            sendRuntimeMessage({ action: MESSAGE.listCaseFolders }),
+            sendRuntimeMessage({ action: MESSAGE.listCases }),
+            chrome.storage.local.get(["activeCaseId", "workspaceOrigin"])
+          ]);
+          if (!folderResponse?.success || !caseResponse?.success) {
+            throw new Error(folderResponse?.error || caseResponse?.error || t("saveCaseFailed", [], "保存用例失败"));
+          }
+          const folders = folderResponse.folders || [];
+          const byId = new Map(folders.map(folder => [folder.id, folder]));
+          const folderOptions = [];
+          const visited = new Set();
+          const addFolder = (folder, ancestors = []) => {
+            if (visited.has(folder.id)) return;
+            visited.add(folder.id);
+            const path = [...ancestors, folder.name];
+            folderOptions.push({ value: folder.id, name: folder.name, label: path.join(" / "), depth: ancestors.length });
+            for (const child of folders.filter(item => item.parentId === folder.id)) {
+              addFolder(child, path);
+            }
+          };
+          folders.filter(folder => !byId.has(folder.parentId)).forEach(folder => addFolder(folder));
+          folders.forEach(folder => addFolder(folder));
+          const originId = workspace.activeCaseId || workspace.workspaceOrigin?.caseId;
+          const currentCase = (caseResponse.cases || []).find(item => item.id === originId);
+          const answer = await promptText({
+            title: t("saveCaseAction", [], "保存用例"),
+            message: t("saveCaseHint", [], "保存后可在工作台查看全部用例。"),
+            label: t("caseName", [], "用例名称"),
+            value: caseName,
+            confirmText: t("save", [], "保存"),
+            selection: {
+              label: t("saveCaseFolder", [], "保存分类"),
+              value: byId.has(currentCase?.folderId) ? currentCase.folderId : "",
+              options: [
+                { value: "", label: t("unfiledCases", [], "未分类") },
+                ...folderOptions
+              ]
+            }
+          });
+          if (answer === null) return;
+
+          const response = await sendRuntimeMessage({
+            action: MESSAGE.saveCase, name: answer.text,
+            snapshot: isRecording, folderId: answer.selection || null
+          });
+          if (response?.success) {
+            // The worker generates a name when this one is empty and files the case
+            // under that, so remember what it actually used.
+            caseName = response.case?.name || caseName;
+            const targetFolderId = answer.selection || null;
+            // An already-running worker may still use the old save route, which
+            // ignores folderId. Verify its result before reporting a successful save.
+            if ((response.case?.folderId || null) !== targetFolderId) {
+              if (!response.case?.id) throw new Error(t("saveCaseFailed", [], "保存用例失败"));
+              const moved = await sendRuntimeMessage({
+                action: MESSAGE.moveCasesToFolder,
+                caseIds: [response.case.id], folderId: targetFolderId
+              });
+              if (!moved?.success) {
+                throw new Error(moved?.error || t("moveCasesFailed", [], "移动用例失败"));
+              }
+            }
+            flashSaved();
+          } else {
+            reportError(response?.error || t("saveCaseFailed", [], "保存用例失败"));
+          }
+        } catch (error) {
+          reportError(error.message || t("saveCaseFailed", [], "保存用例失败"));
+        } finally {
+          saveCurrentCaseBtn.disabled = renderedActions.length === 0;
         }
-        saveCurrentCaseBtn.disabled = renderedActions.length === 0;
       });
 
       async function downloadRecording() {
@@ -355,7 +422,7 @@
           const name = caseName || t("unnamedCase", [], "未命名用例");
           const language = globalThis.RecorderI18n.getLanguage?.() || "zh_CN";
           await navigator.clipboard.writeText(globalThis.StepDocGenerator.generateTask(name, renderedActions, language));
-          notify(t("agentManualCopied", [], "任务说明已复制"));
+          notify(t("copyTaskCopied", [], "任务说明已复制"));
         } catch (error) {
           reportError(error.message || t("copyFailed", [], "复制失败"));
         } finally {
@@ -380,7 +447,7 @@
         if (area !== "local") return;
         // actionOrder changes on append and delete; an `action:` key changes
         // when a screenshot binds to an existing step.
-        const touchedActions = changes.actionOrder || changes.isRecording ||
+        const touchedActions = changes.actionOrder || changes.isRecording || changes.workspaceOrigin ||
           Object.keys(changes).some(key => key.startsWith("action:"));
         if (touchedActions) {
           refreshState();

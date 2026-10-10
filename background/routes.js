@@ -8,7 +8,6 @@ export function createApplicationRoutes({
   actionStore,
   cases,
   mediaCleanup,
-  nativeAgent,
   notifyStepsUpdated,
   queueAction,
   queueRecordingTransition,
@@ -38,7 +37,7 @@ export function createApplicationRoutes({
 
     [MESSAGE.newCase]: () => cases.createNew(),
     [MESSAGE.clearSteps]: () => cases.clearWorkspace(),
-    [MESSAGE.saveCase]: request => cases.save(request.name, !!request.snapshot),
+    [MESSAGE.saveCase]: request => cases.save(request.name, !!request.snapshot, request.folderId),
     [MESSAGE.loadCase]: request => cases.load(request.caseId),
     [MESSAGE.deleteCase]: request => cases.remove(request.caseId),
     [MESSAGE.deleteCases]: request => cases.removeMany(request.caseIds),
@@ -51,23 +50,6 @@ export function createApplicationRoutes({
     [MESSAGE.updateCaseFolder]: request => cases.updateFolder(request.folderId, request.changes),
     [MESSAGE.deleteCaseFolder]: request => cases.removeFolder(request.folderId),
     [MESSAGE.moveCasesToFolder]: request => cases.moveToFolder(request.caseIds, request.folderId),
-
-    [MESSAGE.agentConnect]: () => nativeAgent.connect().then(
-      host => ({ success: true, host }),
-      error => {
-        if (/Specified native messaging host not found/i.test(error?.message || "")) {
-          return { success: false, available: false };
-        }
-        throw error;
-      }
-    ),
-    [MESSAGE.agentCreateJob]: request => nativeAgent.createJob(request).then(message => ({ success: true, message })),
-    [MESSAGE.agentUploadChunk]: request => nativeAgent.uploadChunk(request).then(message => ({ success: true, message })),
-    [MESSAGE.agentCommitAndStart]: request => nativeAgent.commitAndStart(request).then(message => ({ success: true, message })),
-    [MESSAGE.agentFollowup]: request => nativeAgent.followup(request).then(message => ({ success: true, message })),
-    [MESSAGE.agentCancel]: request => nativeAgent.cancel(request.jobId).then(message => ({ success: true, message })),
-    [MESSAGE.agentQuery]: request => nativeAgent.query(request.jobId).then(message => ({ success: true, message })),
-    [MESSAGE.agentListJobs]: () => nativeAgent.readJobs().then(jobs => ({ success: true, jobs })),
 
     [MESSAGE.deleteStep]: request => queueAction(() => actionLog.deleteStep(request.index)),
     [MESSAGE.deleteSteps]: request => queueAction(() => actionLog.deleteSteps(request.actionIds)),

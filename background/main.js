@@ -9,7 +9,7 @@
  *   store/      persistence (steps, cases, screenshot cleanup, schema version)
  *   capture/    CDP screencast sessions and the screenshot job queue
  *   recording/  what a recording is: scope, lifecycle, injection, step logging
- *   agent/      Native Messaging     routes.js      application messages
+ *   routes.js   application messages
  *   browser-events.js  Chrome listeners            side-panel.js  panel layout
  */
 import "../shared/media-store.js";
@@ -21,7 +21,6 @@ import { loadLocaleMessages, t } from "./locale.js";
 import { createSerialQueue } from "./queue.js";
 import { registerMessageRouter } from "./router.js";
 import { createApplicationRoutes } from "./routes.js";
-import { createNativeAgentController } from "./agent/native-agent.js";
 import { createSidePanelController } from "./side-panel.js";
 
 import { createScreencastManager } from "./capture/screencast.js";
@@ -104,10 +103,6 @@ const session = createRecordingSession({
 });
 
 const sidePanel = createSidePanelController({ isRecordableTab: scope.isRecordableTab });
-const nativeAgent = createNativeAgentController();
-nativeAgent.recoverInterruptedJobs().catch(error => {
-  console.warn("[Native Agent] Interrupted job recovery failed:", error.message);
-});
 
 // --- Startup ----------------------------------------------------------------
 registerInstallHandler();
@@ -160,7 +155,6 @@ registerMessageRouter(createApplicationRoutes({
   cases,
   loadLocaleMessages,
   mediaCleanup,
-  nativeAgent,
   notifyStepsUpdated,
   queueAction,
   queueRecordingTransition,

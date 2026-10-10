@@ -1,5 +1,15 @@
 # Release
 
+## 1.3.0
+
+- Redesign the workbench with a compact case list, nested folders, clickable breadcrumbs and consistent colors by folder level.
+- Choose a folder when saving from the side panel and verify the saved classification.
+- Keep recording names scoped to the current workspace and restore saved names when loading cases.
+- Make screenshot settings apply consistently when starting or continuing a recording; improve capture status wording.
+- Protect screenshot publication and cleanup with serialization and transaction completion checks.
+- Remove the unused native Bridge and execution-record implementation and its nativeMessaging permission.
+- Publish under MIT and provide GitHub and privacy policy links.
+
 ## 1.2.1
 
 - Continuing a paused recording re-adopts the tabs and windows the session already covered, so actions taken in a window opened earlier are recorded again instead of being dropped.
@@ -18,7 +28,7 @@
 
 ## Pre-release Checklist
 
-1. Replace all placeholders in `docs/PRIVACY_POLICY.md`.
+1. Confirm the store links to the current published `docs/PRIVACY_POLICY.md` and the data disclosures match the implementation.
 2. Review the permissions in `manifest.json`.
 3. Run `npm ci`, `npm run check`, `npm test`, and `npm run test:integration`.
 4. Run `npm run package`.

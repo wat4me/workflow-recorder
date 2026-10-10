@@ -23,13 +23,6 @@ test("cross-context messages have one unique vocabulary", () => {
   assert.equal(protocol.MESSAGE.moveCasesToFolder, "moveCasesToFolder");
   assert.equal(protocol.MESSAGE.deleteCases, "deleteCases");
   assert.equal(protocol.MESSAGE.deleteSteps, "deleteSteps");
-  assert.equal(protocol.MESSAGE.agentJobUpdated, "agentJobUpdated");
-});
-
-test("Agent activity is defined by the shared protocol", () => {
-  const protocol = loadProtocol();
-  assert.equal(protocol.isAgentActive(protocol.AGENT_STATUS.running), true);
-  assert.equal(protocol.isAgentActive(protocol.AGENT_STATUS.completed), false);
 });
 
 test("every gate that drops a click names its reason in one vocabulary", () => {

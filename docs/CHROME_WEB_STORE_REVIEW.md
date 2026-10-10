@@ -1,18 +1,18 @@
 ﻿# Chrome Web Store 上传与审核说明
 
-> 适用版本：1.2.0
-> 核对日期：2026-09-05
-> 上传包：dist/workflow-recorder-1.2.0-web-store.zip
+> 适用版本：1.3.0
+> 核对日期：2026-10-10
+> 上传包：dist/workflow-recorder-1.3.0-web-store.zip
 
 本文内容根据当前源代码和 manifest.json 整理，可用于 Chrome Web Store 开发者后台的 Store listing、Privacy practices 和 Test instructions 页面。
 
 ## 提交前结论
 
-商店 ZIP 的 manifest.json 位于压缩包根目录。扩展不连接开发者服务器，不加载或执行远程代码，录制数据和截图保存在用户本机的扩展存储中。当前版本暂不开放 Bridge 和执行记录入口。
+商店 ZIP 的 manifest.json 位于压缩包根目录。扩展不连接开发者服务器，不加载或执行远程代码，录制数据和截图保存在用户本机的扩展存储中。Bridge 和执行记录实现已移除，不再申请 `nativeMessaging` 权限；“复制给AI”通过剪贴板交接任务说明。
 
-GitLab 代码提交不等同于商店发布。提交当前 1.2.0 包到商店前，应优先复核以下审核事项：
+代码仓库提交不等同于商店发布。提交当前 1.3.0 包到商店前，应优先复核以下审核事项：
 
-1. 当前 UI 已在开始录制前提供知情同意，说明会记录网址、页面内容、操作、输入值和截图；仍需完善隐私政策中的开发者信息和联系方式，并确保商店披露与实现一致。
+1. 当前 UI 已在开始录制前提供知情同意，说明会记录网址、页面内容、操作、输入值和截图；隐私政策已补齐开发者信息，提交时须确认商店使用本文给出的公开链接，并确保数据披露与实现一致。
 2. `content/main.js` 当前会记录 password 类型输入框的实际值，且该值会进入步骤卡片、Markdown 文档和导出 ZIP。必须选择“身份验证信息”数据类型，并在产品内显著披露；更稳妥的做法是发布前改为不记录或固定脱敏为占位符。
 已解决、无需在提交前再处理的项：
 - 最小权限集合。`activeTab` 已从 `manifest.json` 移除，因为代码中没有任何调用依赖它，且现有的 `<all_urls>` 主机权限已覆盖注入和页面读取需求。当前声明的权限为 `storage`、`unlimitedStorage`、`tabs`、`scripting`、`webNavigation`、`sidePanel`、`debugger`，逐项都有对应实现。
@@ -42,7 +42,7 @@ GitLab 代码提交不等同于商店发布。提交当前 1.2.0 包到商店前
 - 跟踪录制页面打开的子标签页与子窗口。
 - 自动或手动保存步骤截图。
 - 在侧边栏录制、查看和编辑步骤，在全屏用例工作台中查看、删除和管理已保存用例。
-- 保存历史用例，并将单个或多个用例导出为包含 Markdown 文档和 JPG 截图的 ZIP 文件。
+- 保存历史用例，支持三级文件夹分类、目录导航和移动；将单个或多个用例导出为包含 Markdown 文档和 JPG 截图的 ZIP 文件。
 - 在侧边栏或全屏用例页面复制 Markdown 任务说明，粘贴到支持浏览器操作的 AI 工具中继续处理。
 - 支持简体中文和英文界面。
 
@@ -134,7 +134,7 @@ Host permission <all_urls>: The extension's single purpose is to record workflow
 
 说明：所有 JavaScript 均包含在扩展包内。ZIP 功能使用包内 vendor/fflate.js，并附带许可证文件。代码中没有 XMLHttpRequest、WebSocket、远程 script、eval 或 new Function。唯一的 fetch 调用出现在 shared/i18n.js 与 background/locale.js，且仅用于通过 chrome.runtime.getURL 读取扩展包内的 `_locales/<语言>/messages.json`，不产生任何网络请求。
 
-### 数据类型选择（按当前 1.2.0 实现）
+### 数据类型选择（按当前 1.3.0 实现）
 
 必须选择：
 
@@ -163,7 +163,7 @@ Host permission <all_urls>: The extension's single purpose is to record workflow
 
 ### 隐私政策 URL
 
-Chrome Web Store 要求填写公开可访问的 HTTPS 地址。可将 docs/PRIVACY_POLICY.md 中的最终版本发布到公司官网、GitHub Pages 或其他无需登录即可访问的页面。提交前必须替换开发者名称、联系邮箱和生效日期。
+Chrome Web Store 要求填写公开可访问的 HTTPS 地址。当前政策地址为 https://github.com/wat4me/workflow-recorder/blob/main/docs/PRIVACY_POLICY.md ，开发者为 wat4me，联系邮箱为 wat4mefoxmail@gmail.com。提交前请把商店后台原 ai-record 仓库链接替换为此地址。
 
 ## 三、审核测试说明（Test instructions）
 
@@ -177,7 +177,7 @@ Chrome Web Store 要求填写公开可访问的 HTTPS 地址。可将 docs/PRIVA
 4. 点击页面中的“More information...”链接，等待页面跳转。
 5. 返回侧边栏，可以看到录制开始时的打开页面步骤，以及后续由用户触发的点击步骤和对应截图；登录跳转或刷新不会额外生成打开页面步骤。
 6. 点击“停止录制”。调试会话会立即断开。
-7. 在侧边栏顶部输入用例名称并点击“保存用例”。点击“复制给AI”可将当前录制整理为 Markdown 并复制到剪贴板；停止录制后，宽屏通过“更多”中的“下载录制结果”，窄屏通过顶部下载按钮（空间不足时只显示图标），可下载包含 Markdown 流程文档和 screenshots 目录中 JPG 图片的 ZIP。
+7. 点击“保存用例”，在弹窗中输入名称、选择保存分类并确认。点击“复制给AI”可将当前录制整理为 Markdown 并复制到剪贴板；停止录制后，宽屏通过“更多”中的“下载录制结果”，窄屏通过顶部下载按钮（空间不足时只显示图标），可下载包含 Markdown 流程文档和 screenshots 目录中 JPG 图片的 ZIP。
 8. 若要测试输入和选择，可在 https://www.w3schools.com/html/html_forms.asp 中使用虚构的非敏感文本重复步骤 2 至 6。
 
 限制：chrome:// 页面和其他 Chrome 内部页面无法录制；file:// 页面需要用户在扩展详情中手动允许访问文件网址。
@@ -192,7 +192,7 @@ No account, paid subscription, or external service is required.
 4. Click the “More information...” link and wait for navigation.
 5. Return to the side panel. The open-page and click steps, with screenshots, should be visible.
 6. Click “Stop recording.” The debugger session is detached immediately.
-7. Enter a case name and click “Save as case.” Click “Copy for AI” to copy the current recording as Markdown, or use “Export recording” under “More actions” to download a ZIP containing a Markdown workflow document and JPG files in a screenshots folder.
+7. Click “Save as case,” enter a name, choose a destination folder, and confirm. Click “Copy for AI” to copy the current recording as Markdown, or use “Export recording” under “More actions” to download a ZIP containing a Markdown workflow document and JPG files in a screenshots folder.
 8. To test typing and selection, repeat steps 2–6 on https://www.w3schools.com/html/html_forms.asp using fictional, non-sensitive text.
 
 Limitations: chrome:// and other Chrome internal pages cannot be recorded. file:// pages require the user to enable file URL access in the extension details.

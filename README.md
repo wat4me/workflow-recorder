@@ -27,7 +27,7 @@
 - 支持步骤删除和自动滚动到最新步骤；删除步骤或历史用例时会清理不再被引用的截图 Blob。
 - 支持保存历史用例、加载后继续录制、多选导出文档，以及导入/导出可协作的 `.swrcase` 用例包。
 - 支持侧边栏录制与全屏用例工作台两种操作界面。
-- 当前发布版本暂不开放 Bridge 和执行记录入口；相关实现及已有记录保留，“复制给AI”可独立使用。
+- “复制给AI”将录制步骤整理为 Markdown 任务说明，可粘贴到 AI 工具中继续处理。
 - 支持简体中文和英文界面，可通过右上角语言按钮手动切换并记住选择。
 - 界面统一使用亮色主题，按钮共享悬停、按下和键盘聚焦反馈；禁用按钮不响应悬停，减少动态效果偏好下不显示按钮位移。
 - 导出的 AI 操作文档保持稳定的英文结构，便于程序和模型消费。
@@ -94,8 +94,9 @@ div#nprogress
 
 ### 4. 保存和继续录制
 
-- 点击“保存为用例”可保存当前步骤快照。
+- 点击“保存为用例”可填写名称并选择保存分类，保存当前步骤快照。可选择“未分类”或工作台中的已有文件夹；从已有用例继续录制时默认选中原分类。
 - 已保存用例统一在全屏用例工作台中查看和加载。
+- 进入文件夹后，右侧列表会在用例前平铺显示其直接子文件夹，通过文件夹和文档图标区分，可点击进入下一层，或通过“更多”菜单重命名、移动、删除；子文件夹的用例数量包含其后代目录。
 - 加载历史用例后，主按钮显示“继续录制”。
 - 继续录制时保留原有步骤，并追加新的操作。
 - 需要重录时，先点击“清空步骤”并确认，再点击“开始录制”。清空不会自动保存或开始录制，也不会影响已保存用例；需要保留当前内容时，请先保存用例。
@@ -354,9 +355,8 @@ screenshot:<actionId>:b<captureId>  # 操作前帧
 `background/main.js` 是装配入口；消息路由和 Chrome 事件注册分别由独立模块承接。
 
 - `background/router.js`：消息分发。`action` 名到处理函数的映射，统一处理异步响应和错误包装。
-- `background/routes.js`：工作区、用例、截图与 Agent 的应用消息边界。
+- `background/routes.js`：工作区、用例与截图的应用消息边界。
 - `background/browser-events.js`：标签页、窗口、导航和 keepalive 事件注册。
-- `background/agent/native-agent.js`：Native Messaging 客户端及 Agent 任务记录。
 - `background/install.js`：安装与升级引导，保留工作区数据、重置运行态、清理废弃键。
 - `background/locale.js`：Service Worker 侧翻译，以及供内容脚本读取的 `_locales` 目录服务。
 - `background/side-panel.js`：按标签页启用侧边栏，以及侧边栏打开时的页面缩放同步。
@@ -389,7 +389,7 @@ screenshot:<actionId>:b<captureId>  # 操作前帧
 - `ui/popup-entry.js` / `ui/console-entry.js`：页面唯一的 ES-module 入口，显式声明内部依赖。
 - `ui/popup.html` / `ui/popup.js`：Chrome 侧边栏界面。
 - `ui/console.html` / `ui/console.js`：全屏用例库和只读步骤预览。
-- `ui/styles/base.css` / `ui/styles/console.css`：按基础、控件、步骤、Agent 和预览职责聚合样式。
+- `ui/styles/base.css` / `ui/styles/console.css`：按基础、控件、步骤和预览职责聚合样式。
 - `ui/styles/theme-refresh.css` / `ui/styles/tokens.css`：侧边栏与工作台共用的颜色、字号和控件状态；`ui/lib/icons.js` 提供本地 SVG 操作图标。
 - `ui/app/recorder-panel.js`：侧边栏录制控制、当前工作区保存和导出。
 - `ui/app/case-workbench.js`：全屏用例管理、批量文档导出、分享包、导入和删除。
@@ -408,7 +408,7 @@ HTML 只引用页面入口，内部加载顺序由 ES-module import 图维护。
 ### 共享模块
 
 - `shared/i18n.js`：界面国际化。同时用于 Service Worker、内容脚本和扩展页面。
-- `shared/protocol.js`：跨上下文消息名和 Agent 状态的唯一来源。
+- `shared/protocol.js`：跨上下文消息名的唯一来源。
 - `shared/media-store.js`：后台与 UI 共用的步骤截图 IndexedDB Blob 存储。
 - `vendor/fflate.js`：ZIP 生成依赖。
 - `_locales/`：中英文词条。

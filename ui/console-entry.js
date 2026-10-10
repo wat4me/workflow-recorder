@@ -6,6 +6,7 @@ import "../shared/media-store.js";
 import "./lib/dom.js";
 import "./lib/doc-generator.js";
 import "./lib/bridge.js";
+import "./lib/folder-picker.js";
 import "./lib/dialogs.js";
 import "./lib/settings-dialog.js";
 import "./lib/export.js";

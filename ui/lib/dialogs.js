@@ -106,14 +106,15 @@
     });
   }
 
-  /** Resolves with the trimmed text, or null if cancelled. */
+  /** Resolves with text (and an optional selection), or null if cancelled. */
   function promptText({
     title = t("confirmAction", [], "确认操作"),
     message = "",
     label = "",
     confirmText = t("confirm", [], "确认"),
     value = "",
-    maxLength = 120
+    maxLength = 120,
+    selection = null
   } = {}) {
     return new Promise(resolve => {
       const overlay = document.createElement("div");
@@ -146,15 +147,31 @@
       input.maxLength = maxLength;
       input.value = value;
 
+      let picker = null;
+      if (selection) {
+        const field = document.createElement("div");
+        field.className = "recording-name-field";
+        const caption = document.createElement("span");
+        caption.textContent = selection.label;
+        picker = globalThis.RecorderFolderPicker.create(selection);
+        field.append(caption, picker.element);
+        overlay.querySelector(".confirm-content").appendChild(field);
+      }
+
       const finish = result => {
         document.removeEventListener("keydown", onKeyDown);
         overlay.remove();
         resolve(result);
       };
-      const submit = () => finish(input.value.trim());
+      const submit = () => finish(picker
+        ? { text: input.value.trim(), selection: picker.value }
+        : input.value.trim());
       const onKeyDown = event => {
         if (event.key === "Escape") finish(null);
-        if (event.key === "Enter") submit();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submit();
+        }
       };
 
       overlay.querySelector(".confirm-cancel").addEventListener("click", () => finish(null));

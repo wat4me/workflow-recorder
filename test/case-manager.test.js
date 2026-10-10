@@ -121,6 +121,36 @@ test("saving banks the workspace and makes the case the active baseline", async 
   assert.notEqual(storage.data[`case:${result.case.id}`].actions, storage.data["action:s1"]);
 });
 
+test("saving commits the selected folder with the case and preserves snapshot semantics", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("s1")]);
+  const folder = await cases.createFolder("Login flows");
+  assert.equal(folder.success, true);
+  const snapshot = await cases.save("Snapshot", true, folder.folder.id);
+  assert.equal(snapshot.success, true);
+  assert.equal(snapshot.case.folderId, folder.folder.id);
+  assert.equal(storage.data.caseIndex[0].folderId, folder.folder.id);
+  assert.equal(storage.data.activeCaseId, undefined);
+  const saved = await cases.save("Filed", false, folder.folder.id);
+  assert.equal(saved.success, true);
+  assert.equal(saved.case.folderId, folder.folder.id);
+  assert.equal(storage.data.activeCaseId, saved.case.id);
+  const unfiled = await cases.save("Unfiled", false, null);
+  assert.equal(unfiled.case.folderId || null, null);
+});
+
+test("a missing or invalid save folder leaves the case index and workspace unchanged", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("s1")]);
+  const before = structuredClone(storage.data);
+  for (const folderId of ["deleted-folder", {}, 123, ""]) {
+    const saved = await cases.save("Filed", false, folderId);
+    assert.equal(saved.success, false);
+    assert.match(saved.error, /文件夹不存在/);
+    assert.deepEqual(storage.data, before);
+  }
+});
+
 test("a snapshot is banked without becoming the baseline", async () => {
   const { cases, storage } = await setup();
   seedWorkspace(storage, [action("s1")]);

@@ -31,8 +31,7 @@
   min-width: 0;
 }
 
-.preview-panel > .panel-head .badge,
-.preview-readonly-tag {
+.preview-panel > .panel-head .badge {
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -40,15 +39,6 @@
 .btn-compact {
   padding: 4px 10px;
   font-size: 11px;
-}
-
-.preview-readonly-tag {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: var(--radius-xs);
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
 }
 
 @media (max-width: 760px) {

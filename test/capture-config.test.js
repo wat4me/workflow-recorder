@@ -57,11 +57,11 @@ test("manifest entry points resolve to files that exist", () => {
   }
 });
 
-test("a missing Native Messaging Host is treated as an optional Bridge", () => {
-  const routes = read("background", "routes.js");
-
-  assert.match(routes, /Specified native messaging host not found/);
-  assert.match(routes, /return \{ success: false, available: false \}/);
+test("published extension excludes native Agent execution", () => {
+  const manifest = JSON.parse(read("manifest.json"));
+  const workers = collectSources(["background"]).join("\n");
+  assert.ok(!manifest.permissions.includes("nativeMessaging"));
+  assert.doesNotMatch(workers, /connectNative|createNativeAgentController|MESSAGE\.agent/);
 });
 
 test("manifest references complete Semantic Recorder icon sizes", () => {
@@ -234,7 +234,7 @@ test("recording and saved-case management stay in their own surfaces", () => {
   assert.doesNotMatch(popup, /id="step-selection-count"/);
   assert.match(popup, /class="selection-control step-select-all"[\s\S]*?class="selection-checkbox"/);
   assert.match(popup, /class="case-actionbar"[\s\S]*?id="save-current-case-btn"[\s\S]*?class="copy-task-control"[\s\S]*?id="copy-task-btn"/);
-  assert.match(popup, /id="copy-task-btn"[\s\S]*?data-i18n="agentManualCopy"/);
+  assert.match(popup, /id="copy-task-btn"[\s\S]*?data-i18n="copyForAI"/);
   assert.match(popup, /id="copy-task-btn"[\s\S]*?aria-describedby="copy-task-tooltip"/);
   assert.match(popup, /class="tooltip-content"[\s\S]*?role="tooltip"[\s\S]*?data-i18n="copyTaskHint"/);
   assert.match(popup, /class="tooltip-trigger copy-task-info"[\s\S]*?data-i18n-aria-label="copyTaskHelp"/);
@@ -290,7 +290,7 @@ test("the case name is asked for when it is needed, not kept on the page", () =>
   // Prefilled with the remembered name, and a cancelled dialog must return
   // without saving rather than fall through to a nameless save.
   assert.match(panel, /label: t\("caseName", \[\], "用例名称"\)[\s\S]{0,40}value: caseName/);
-  assert.match(panel, /const name = await askCaseName\(\{[\s\S]*?saveCaseAction[\s\S]*?if \(name === null\) return;/);
+  assert.match(panel, /const answer = await promptText\(\{[\s\S]*?saveCaseAction[\s\S]*?if \(answer === null\) return;/);
   // The name the worker actually filed the case under, which is not the typed one
   // when it was left empty.
   assert.match(panel, /caseName = response\.case\?\.name \|\| caseName;/);
@@ -370,7 +370,6 @@ test("hideable panels override the author display rules", () => {
   // An author `display` declaration beats the UA rule behind the `hidden`
   // attribute, so without these the panels render on top of each other.
   assert.match(styles, /\.console-panel\[hidden\][\s\S]*?display: none/);
-  assert.match(styles, /\.agent-provider-field\[hidden\][\s\S]*?#agent-cancel-btn\[hidden\][\s\S]*?display: none/);
   assert.match(styles, /\.empty-state\[hidden\][\s\S]*?display: none/);
 });
 
@@ -472,7 +471,7 @@ test("text prompts use a full-width single-column dialog", () => {
 
   assert.match(dialogs, /confirm-dialog save-recording-dialog prompt-text-dialog/);
   assert.match(styles, /\.prompt-text-dialog \{[\s\S]*?flex-direction: column/);
-  assert.match(styles, /\.prompt-text-dialog \.recording-name-field input \{[\s\S]*?height: 40px[\s\S]*?font-size: 14px/);
+  assert.match(styles, /\.prompt-text-dialog \.recording-name-field input,[\s\S]*?select \{[\s\S]*?height: 40px[\s\S]*?font-size: 14px/);
 });
 
 /**

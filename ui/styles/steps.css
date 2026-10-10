@@ -843,7 +843,8 @@
   font-size: 12px;
 }
 
-.prompt-text-dialog .recording-name-field input {
+.prompt-text-dialog .recording-name-field input,
+.prompt-text-dialog .recording-name-field select {
   height: 40px;
   padding: 8px 12px;
   font-size: 14px;
@@ -864,7 +865,8 @@
   font-weight: 600;
 }
 
-.recording-name-field input {
+.recording-name-field input,
+.recording-name-field select {
   width: 100%;
   height: 34px;
   padding: 6px 10px;
@@ -879,7 +881,8 @@
   outline: none;
 }
 
-.recording-name-field input:focus {
+.recording-name-field input:focus,
+.recording-name-field select:focus {
   border-color: var(--accent-color);
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }

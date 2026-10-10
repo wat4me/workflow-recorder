@@ -17,7 +17,7 @@ test("Chinese and English locales expose the same messages", () => {
 
 test("public AI copy instructions do not require internal skills", () => {
   for (const locale of [zh, en]) {
-    for (const key of ["copyTaskHint", "agentManualModeHint"]) {
+    for (const key of ["copyTaskHint"]) {
       assert.doesNotMatch(locale[key].message, /test-base|\bskills?\b/i);
       assert.match(locale[key].message, /Markdown/);
     }

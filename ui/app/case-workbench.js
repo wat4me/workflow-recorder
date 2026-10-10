@@ -1,11 +1,13 @@
 /** Fullscreen saved-case library: browse, select, share, import, export and delete. */
 import { attachFolders } from "./case-folders.js";
 import { iconSvg } from "../lib/icons.js";
+import { applyFolderColor } from "../lib/folder-colors.js";
 
 if (!globalThis.RecorderCaseWorkbench) {
   function create(options) {
     const {
       list, emptyState, countBadge, selectionLabel, searchInput, searchScope, selectAll,
+      allCasesButton, locationTitle, locationMeta, actionbar,
       folderList, createFolderButton, moveToFolderButton, importButton, exportPackageButton,
       exportDocumentsButton, deleteCasesButton, fileInput, onOpenCase, onCasesChanged = () => {}
     } = options;
@@ -30,8 +32,10 @@ if (!globalThis.RecorderCaseWorkbench) {
       return globalThis.RecorderI18n.getLanguage() === "zh_CN" ? "zh-CN" : "en";
     }
     function updateSelection() {
+      actionbar?.classList.toggle("has-selection", ctx.selectedIds.size > 0);
       const visibleIds = ctx.filteredCases.map(item => item.id);
       const visibleSelected = visibleIds.filter(id => ctx.selectedIds.has(id)).length;
+      selectAll.disabled = visibleIds.length === 0;
       selectAll.checked = visibleIds.length > 0 && visibleSelected === visibleIds.length;
       selectAll.indeterminate = visibleSelected > 0 && visibleSelected < visibleIds.length;
       exportPackageButton.disabled = ctx.selectedIds.size === 0;
@@ -108,8 +112,24 @@ if (!globalThis.RecorderCaseWorkbench) {
         year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
       });
       const meta = document.createElement("span");
-      const folderSuffix = searchScope.value === "all" ? ` · ${ctx.folderName(caseRecord.folderId)}` : "";
-      meta.textContent = t("stepsMeta", [caseRecord.stepCount, date], `${caseRecord.stepCount} 个步骤 · ${date}`) + folderSuffix;
+      const showFolder = searchScope.value === "all"
+        || (ctx.activeFolderId !== "unfiled" && caseRecord.folderId !== ctx.activeFolderId);
+      meta.textContent = t("stepsMeta", [caseRecord.stepCount, date], `${caseRecord.stepCount} 个步骤 · ${date}`);
+      if (showFolder) {
+        meta.append(document.createTextNode(" · "));
+        const folders = ctx.folderAncestors(caseRecord.folderId);
+        const path = folders.length ? folders : [{ id: null, name: t("unfiledCases", [], "未分类") }];
+        path.forEach((folder, index) => {
+          if (index) meta.append(document.createTextNode(" / "));
+          const label = document.createElement("span");
+          label.className = "case-folder-label";
+          label.dataset.folderId = folder.id || "unfiled";
+          label.textContent = folder.name;
+          applyFolderColor(label, folder.id ? index + 1 : 0);
+          meta.append(label);
+        });
+      }
+      meta.title = meta.textContent;
       info.append(name, meta);
       info.addEventListener("click", () => onOpenCase(caseRecord));
       const actions = document.createElement("div");
@@ -159,7 +179,10 @@ if (!globalThis.RecorderCaseWorkbench) {
       remove.addEventListener("dragstart", event => event.stopPropagation());
       actions.append(move, remove);
       item.classList.toggle("is-selected", checkbox.checked);
-      item.append(checkbox, info, actions);
+      const symbol = document.createElement("span");
+      symbol.className = "library-item-symbol";
+      symbol.innerHTML = iconSvg("document", 20);
+      item.append(checkbox, symbol, info, actions);
       return item;
     }
     function readDraggedCaseIds(dataTransfer) {
@@ -191,6 +214,58 @@ if (!globalThis.RecorderCaseWorkbench) {
       await refresh();
       return true;
     }
+    function openFolder(folderId) {
+      ctx.activeFolderId = folderId;
+      searchScope.value = "current";
+      ctx.expandFolderAncestors(folderId, ctx.collapsedFolders);
+      render();
+      locationTitle?.setAttribute("tabindex", "-1");
+      locationTitle?.focus({ preventScroll: true });
+    }
+    function buildSubfolderItems() {
+      const children = searchScope.value === "current"
+        ? ctx.folders.filter(folder => folder.parentId === ctx.activeFolderId)
+          .sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0))
+        : [];
+      return children.map(folder => {
+        const descendants = ctx.descendantIds(folder.id);
+        const count = ctx.cases.filter(item => descendants.has(item.folderId)).length;
+        const card = document.createElement("div");
+        card.className = "library-folder-item subfolder-card";
+        card.dataset.subfolderId = folder.id;
+        applyFolderColor(card, ctx.folderAncestors(folder.id).length);
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "library-item-info subfolder-open subfolder-info";
+        open.title = folder.name;
+        const placeholder = document.createElement("span");
+        placeholder.setAttribute("aria-hidden", "true");
+        const symbol = document.createElement("span");
+        symbol.className = "library-item-symbol";
+        symbol.innerHTML = iconSvg("folder", 20);
+        const name = document.createElement("strong");
+        name.textContent = folder.name;
+        const meta = document.createElement("span");
+        meta.textContent = t("visibleCaseCount", [count], `${count} 个用例`);
+        open.append(name, meta);
+        open.addEventListener("click", () => openFolder(folder.id));
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "library-item-btn subfolder-more";
+        more.innerHTML = iconSvg("more");
+        more.title = t("folderActions", [], "文件夹操作：重命名、移动、删除");
+        more.setAttribute("aria-label", `${folder.name} · ${more.title}`);
+        more.setAttribute("aria-haspopup", "menu");
+        more.setAttribute("aria-expanded", "false");
+        more.addEventListener("click", () => ctx.showFolderMenu(more, folder.id, folder.name, count));
+        const actions = document.createElement("div");
+        actions.className = "library-item-actions";
+        actions.append(more);
+        card.append(placeholder, symbol, open, actions);
+        return card;
+      });
+    }
+
     function render() {
       const query = searchInput.value.trim().toLocaleLowerCase(localeTag());
       ctx.filteredCases = ctx.cases.filter(item => {
@@ -200,11 +275,54 @@ if (!globalThis.RecorderCaseWorkbench) {
           || (ctx.activeFolderId === "unfiled" ? !hasKnownFolder : activeFolderIds.has(item.folderId));
         return inFolder && (!query || item.name.toLocaleLowerCase(localeTag()).includes(query));
       });
-      list.replaceChildren(...ctx.filteredCases.map(buildItem));
+      const subfolders = buildSubfolderItems();
+      list.replaceChildren(...subfolders, ...ctx.filteredCases.map(buildItem));
       countBadge.textContent = String(ctx.cases.length);
+      allCasesButton?.classList.toggle("is-active", searchScope.value === "all");
+      allCasesButton?.setAttribute("aria-pressed", String(searchScope.value === "all"));
+      if (locationTitle) {
+        const ancestors = [];
+        const visited = new Set();
+        let folder = ctx.folders.find(item => item.id === ctx.activeFolderId);
+        while (folder && !visited.has(folder.id)) {
+          ancestors.unshift(folder);
+          visited.add(folder.id);
+          folder = ctx.folders.find(item => item.id === folder.parentId);
+        }
+        locationTitle.replaceChildren();
+        if (searchScope.value === "all" || ancestors.length === 0) {
+          locationTitle.textContent = searchScope.value === "all"
+            ? t("allCases", [], "全部用例") : t("unfiledCases", [], "未分类");
+        } else {
+          ancestors.forEach((ancestor, index) => {
+            if (index > 0) {
+              const separator = document.createElement("span");
+              separator.className = "library-path-separator";
+              separator.textContent = " / ";
+              separator.setAttribute("aria-hidden", "true");
+              locationTitle.append(separator);
+            }
+            const current = index === ancestors.length - 1;
+            const part = document.createElement(current ? "span" : "button");
+            part.className = "library-path-part";
+            part.textContent = ancestor.name;
+            if (current) {
+              part.setAttribute("aria-current", "location");
+            } else {
+              part.type = "button";
+              part.dataset.folderId = ancestor.id;
+              part.addEventListener("click", () => openFolder(ancestor.id));
+            }
+            locationTitle.append(part);
+          });
+        }
+        locationTitle.title = locationTitle.textContent;
+      }
+      if (locationMeta) locationMeta.textContent = t("visibleCaseCount", [ctx.filteredCases.length], `${ctx.filteredCases.length} 个用例`);
       ctx.renderFolders();
-      emptyState.hidden = ctx.filteredCases.length > 0;
-      list.hidden = ctx.filteredCases.length === 0;
+      const hasItems = subfolders.length > 0 || ctx.filteredCases.length > 0;
+      emptyState.hidden = hasItems;
+      list.hidden = !hasItems;
       const title = emptyState.querySelector("p");
       const hint = emptyState.querySelector("span");
       if (query && ctx.filteredCases.length === 0) {
@@ -269,6 +387,10 @@ if (!globalThis.RecorderCaseWorkbench) {
     });
     searchInput.addEventListener("input", render);
     searchScope.addEventListener("change", render);
+    allCasesButton?.addEventListener("click", () => {
+      searchScope.value = "all";
+      render();
+    });
     createFolderButton.addEventListener("click", async () => { await ctx.createFolder(); });
     moveToFolderButton.addEventListener("click", async () => { await ctx.showMoveDialog([...ctx.selectedIds]); });
     deleteCasesButton.addEventListener("click", async () => {

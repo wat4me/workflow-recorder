@@ -77,16 +77,23 @@ export function createCaseManager({
     return Array.from(pagesByName.values());
   }
 
-  function saveCase(name, snapshot = false) {
-    const write = () => saveCaseUnlocked(name, snapshot);
+  function saveCase(name, snapshot = false, folderId = null) {
+    const write = () => saveCaseUnlocked(name, snapshot, folderId);
     return globalThis.RecorderMediaStore?.withWriteLock
       ? globalThis.RecorderMediaStore.withWriteLock(write)
       : write();
   }
 
-  async function saveCaseUnlocked(name, snapshot = false) {
+  async function saveCaseUnlocked(name, snapshot = false, folderId = null) {
     const blocked = await blockedReason();
     if (blocked) return { success: false, error: blocked };
+
+    if (folderId !== null && (typeof folderId !== "string" || !folderId)) {
+      return { success: false, error: t("errorFolderNotFound", [], "文件夹不存在") };
+    }
+    if (folderId && !(await caseStore.readFolders()).some(folder => folder.id === folderId)) {
+      return { success: false, error: t("errorFolderNotFound", [], "文件夹不存在") };
+    }
 
     const actions = await actionStore.readActions();
     if (actions.length === 0) {
@@ -97,6 +104,7 @@ export function createCaseManager({
     const caseRecord = {
       id: generateCaseId(),
       name: name || defaultCaseName(),
+      folderId,
       createdAt: Date.now(),
       actions: structuredClone(actions),
       pages: collectPages(actions),
@@ -610,7 +618,7 @@ export function createCaseManager({
     remove: caseId => queueCaseWrite(() => removeCase(caseId)),
     removeMany: caseIds => queueCaseWrite(() => removeCases(caseIds)),
     removeFolder: folderId => queueCaseWrite(() => removeFolder(folderId)),
-    save: (name, snapshot) => queueCaseWrite(() => saveCase(name, snapshot)),
+    save: (name, snapshot, folderId) => queueCaseWrite(() => saveCase(name, snapshot, folderId)),
     updateFolder: (id, changes) => queueCaseWrite(() => updateFolder(id, changes))
   };
 }

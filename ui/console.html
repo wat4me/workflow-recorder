@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/console.css">
   <link rel="stylesheet" href="styles/theme-refresh.css">
+  <link rel="stylesheet" href="styles/workbench-page.css">
 </head>
 <body>
   <div class="console-container">
@@ -19,6 +20,12 @@
         </div>
       </div>
       <div class="toolbar">
+        <a class="btn open-source-link" href="https://github.com/wat4me/workflow-recorder" target="_blank" rel="noopener noreferrer" title="已采用 MIT 协议开源，查看源码、反馈问题或参与贡献（在新标签页打开）" aria-label="已采用 MIT 协议开源，查看源码、反馈问题或参与贡献（在新标签页打开）" data-i18n-title="openSourceHint" data-i18n-aria-label="openSourceHint">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"></path>
+          </svg>
+          <span data-i18n="openSource">GitHub 开源</span>
+        </a>
         <button class="icon-btn settings-btn" id="capture-settings-btn" type="button" title="录制设置" aria-label="录制设置" data-i18n-title="captureSettingsTitle" data-i18n-aria-label="captureSettingsTitle">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"></circle>
@@ -31,31 +38,9 @@
 
     <main class="console-main workbench-main">
       <section class="console-panel case-library-panel" id="case-library-panel">
-        <div class="panel-head library-head">
-          <div class="library-title">
-            <h2 data-i18n="caseManagement">用例管理</h2>
-            <span class="badge" id="case-library-count">0</span>
-            <span class="library-subtitle" data-i18n="caseManagementHint">集中查看、分享和导出已保存用例</span>
-          </div>
-          <div class="library-head-actions">
-            <div class="case-search-group">
-              <select id="case-search-scope" aria-label="搜索范围" data-i18n-aria-label="searchScope">
-                <option value="all" data-i18n="allCases">全部用例</option>
-                <option value="current" data-i18n="currentFolder">当前分类</option>
-              </select>
-              <label class="case-search-field">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                  <circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path>
-                </svg>
-                <input id="case-search-input" type="search" autocomplete="off" placeholder="搜索用例" data-i18n-placeholder="searchCases">
-              </label>
-            </div>
-            <button class="btn btn-secondary" id="import-case-package-btn" type="button" title="导入 .swrcase 用例包到未分类，包含操作步骤和截图；导出文档的 ZIP 不能作为用例导入。" data-i18n-title="importCasePackageHint" data-i18n="importCasePackage">导入用例</button>
-          </div>
-        </div>
-
         <div class="library-workspace">
           <aside class="case-folder-sidebar" aria-label="用例文件夹" data-i18n-aria-label="caseFolders">
+            <button class="all-cases-navigation" id="all-cases-btn" type="button"><span data-i18n="allCases">全部用例</span><span class="badge" id="case-library-count">0</span></button>
             <div class="case-folder-heading" title="拖到其他目录可移入，拖到此标题可移回根目录。最多支持三级。" data-i18n-title="folderDragHint">
               <span data-i18n="caseFolders">用例文件夹</span>
               <button class="icon-btn" id="create-case-folder-btn" type="button" title="新建文件夹" aria-label="新建文件夹" data-i18n-title="createFolder" data-i18n-aria-label="createFolder">
@@ -66,6 +51,30 @@
             <div class="case-folder-list" id="case-folder-list"></div>
           </aside>
           <div class="library-content">
+            <div class="panel-head library-head">
+              <div class="library-title">
+                <span class="library-eyebrow" data-i18n="caseManagement">用例管理</span>
+                <h2 id="library-location-title">全部用例</h2>
+                <span class="library-subtitle" id="library-location-meta"></span>
+              </div>
+              <div class="library-head-actions">
+                <div class="case-search-group">
+                  <select id="case-search-scope" aria-label="搜索范围" data-i18n-aria-label="searchScope">
+                    <option value="all" data-i18n="allCases">全部用例</option>
+                    <option value="current" data-i18n="currentFolder">当前分类</option>
+                  </select>
+                  <label class="case-search-field">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                      <circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path>
+                    </svg>
+                    <input id="case-search-input" type="search" autocomplete="off" placeholder="搜索用例" data-i18n-placeholder="searchCases">
+                  </label>
+                </div>
+                <button class="btn btn-secondary" id="import-case-package-btn" type="button" title="导入 .swrcase 用例包到未分类，包含操作步骤和截图；导出文档的 ZIP 不能作为用例导入。" data-i18n-title="importCasePackageHint" data-i18n="importCasePackage">导入用例</button>
+              </div>
+            </div>
+
+
             <div class="library-actionbar">
               <label class="selection-control library-select-all"><input class="selection-checkbox" type="checkbox" id="case-library-select-all"><span data-i18n="selectAll">全选</span></label>
               <span class="library-selection" id="case-selection-count" data-i18n="noCaseSelected">未选择用例</span>
@@ -100,7 +109,6 @@
           <h2 id="preview-title"></h2>
           <div class="panel-head-actions">
             <span class="badge" id="preview-step-count">0</span>
-            <span class="preview-readonly-tag" data-i18n="previewReadOnly">只读预览</span>
             <button type="button" class="btn btn-primary btn-compact" id="preview-continue-btn" data-i18n="continueRecording">继续录制</button>
           </div>
         </div>
