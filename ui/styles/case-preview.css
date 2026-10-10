@@ -1,0 +1,65 @@
+/* ── Read-only case preview ── */
+.preview-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-panel .panel-head h2 {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-panel > .panel-head {
+  gap: 12px;
+}
+
+/* Base buttons fill their container. In this toolbar that made the back button
+   consume the entire row and squeezed the title, so toolbar controls opt into their content width instead. */
+.preview-panel > .panel-head > .btn {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+.preview-panel > .panel-head .panel-head-actions {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.preview-panel > .panel-head .badge,
+.preview-readonly-tag {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.btn-compact {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.preview-readonly-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+@media (max-width: 760px) {
+  .preview-panel > .panel-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .preview-panel > .panel-head .panel-head-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}

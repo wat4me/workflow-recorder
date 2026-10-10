@@ -1,0 +1,13 @@
+node_modules/
+test-results/
+playwright-report/
+.playwright-cli/
+dist/
+.local/
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.swrcase

@@ -1,0 +1,176 @@
+/*
+ * Workflow Recorder Design System
+ * Theme: Modern Minimalist Light — refined surfaces, subtle depth, clean typography
+ */
+
+:root {
+  color-scheme: light;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #f1f5f9;
+  --bg-hover: #f1f5f9;
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+
+  --border-color: #e2e8f0;
+  --border-hover: #cbd5e1;
+
+  --accent-color: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-light: #eff6ff;
+  --accent-subtle: #dbeafe;
+
+  --success-color: #10b981;
+  --success-light: #ecfdf5;
+  --success-text: #15803d;
+  --success-subtle: #dcfce7;
+  --success-border: #86efac;
+
+  --danger-color: #dc2626;
+  --danger-hover: #b91c1c;
+  --danger-light: #fef2f2;
+  --danger-subtle: #fee2e2;
+  --danger-border: #fecaca;
+
+  --control-hover-overlay: rgba(37, 99, 235, 0.06);
+  --control-pressed-overlay: rgba(37, 99, 235, 0.12);
+  --overlay-backdrop: rgba(15, 23, 42, 0.25);
+
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.03);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.04), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --transition-fast: all 0.15s ease;
+  --transition-smooth: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  width: 100%;
+  min-width: 0;
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ── Header ── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background-color: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 10;
+}
+
+.app-header.compact {
+  padding: 8px 14px;
+}
+
+.logo-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.logo-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.logo-text h1 {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.logo-text span {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-faint);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  display: block;
+  margin-top: 1px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+/* ── Icon Button ── */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: var(--button-bg, var(--bg-primary));
+  border: 1px solid var(--button-border, var(--border-color));
+  border-radius: var(--radius-sm);
+  color: var(--button-text, var(--text-secondary));
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.language-btn {
+  width: auto;
+  min-width: 30px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* ── Main Layout ── */
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 14px 6px;
+  overflow: hidden;
+  gap: 6px;
+  position: relative;
+}

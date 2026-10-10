@@ -1,0 +1,122 @@
+/* ── Case Actions ── */
+.case-actionbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+.case-action-buttons {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.case-action-buttons > .btn,
+.copy-task-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.case-action-buttons .btn {
+  padding-inline: 8px;
+  font-size: 12px;
+}
+
+.copy-task-info {
+  width: 18px;
+  height: 18px;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.8;
+}
+
+.copy-task-control {
+  position: relative;
+  display: flex;
+}
+
+.copy-task-control > .btn {
+  padding-right: 28px;
+}
+
+.copy-task-tooltip {
+  position: absolute;
+  /* The transform creates a stacking context; raise it above later step cards. */
+  z-index: 100;
+  top: 50%;
+  right: 7px;
+  color: #ffffff;
+  transform: translateY(-50%);
+}
+
+.copy-task-tooltip .tooltip-content {
+  top: calc(100% + 9px);
+  bottom: auto;
+  left: auto;
+  right: -8px;
+  transform: translateY(4px);
+}
+
+.copy-task-tooltip .tooltip-content::after {
+  top: auto;
+  bottom: 100%;
+  left: auto;
+  right: 9px;
+  border-top-color: transparent;
+  border-bottom-color: var(--bg-primary);
+  transform: none;
+}
+
+.copy-task-tooltip:hover .tooltip-content,
+.copy-task-tooltip:focus-within .tooltip-content {
+  transform: translateY(0);
+}
+
+@media (max-width: 380px) {
+  .app-header,
+  .app-header.compact {
+    padding-inline: 10px;
+  }
+
+  .app-main {
+    padding-inline: 10px;
+  }
+
+}
+
+/* ── Animations ── */
+@keyframes pulse {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+    box-shadow: 0 0 8px rgba(220, 38, 38, 0.35);
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.7;
+  }
+}
+
+@keyframes pulse-icon {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.85);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="popupTitle">流程录制 - 侧边栏</title>
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/theme-refresh.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header compact recorder-header">
+      <div class="recorder-meta-row">
+        <div class="header-utilities">
+          <button class="icon-btn settings-btn" id="capture-settings-btn" type="button" title="录制设置" aria-label="录制设置" data-i18n-title="captureSettingsTitle" data-i18n-aria-label="captureSettingsTitle">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>
+            </svg>
+          </button>
+          <button class="icon-btn language-btn" id="language-btn" type="button" title="切换到英文" aria-label="切换到英文">EN</button>
+          <button class="icon-btn workspace-btn" id="open-console-btn" title="在新标签页打开用例工作台" aria-label="在新标签页打开用例工作台" data-i18n-title="openConsole" data-i18n-aria-label="openConsole">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 3h6v6"></path>
+              <path d="M10 14L21 3"></path>
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            </svg>
+            <span data-i18n="workspace">工作台</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="record-actions header-record-actions" aria-label="录制操作" data-i18n-aria-label="recordingActions">
+        <button id="record-btn" class="btn btn-primary start-state">
+          <span class="btn-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M8 5v14l11-7z"></path>
+            </svg>
+          </span>
+          <span class="btn-label" id="record-btn-label" data-i18n="startRecording">开始录制</span>
+        </button>
+        <button id="manual-screenshot-btn" class="btn btn-secondary manual-screenshot-btn" type="button" hidden disabled title="更新当前页面最后一个操作的操作后截图，不改变操作前截图" aria-label="更新操作后截图" data-i18n-title="manualScreenshotTitle" data-i18n-aria-label="manualScreenshot">
+          <span class="btn-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14.5 4H9.5L8 6H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3z"></path>
+              <circle cx="12" cy="12.5" r="3.5"></circle>
+            </svg>
+          </span>
+          <span class="btn-label" data-i18n="manualScreenshot">更新操作后截图</span>
+        </button>
+        <button id="download-doc-compact-btn" class="btn btn-secondary download-doc-btn compact-download-btn" type="button" hidden disabled title="下载录制结果" aria-label="下载录制结果" data-i18n-title="exportResult" data-i18n-aria-label="exportResult">
+          <span class="btn-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14"></path>
+            </svg>
+          </span>
+          <span class="btn-label" data-i18n="exportResult">下载录制结果</span>
+        </button>
+        <div class="more-actions-wrap">
+          <button id="more-actions-btn" class="icon-btn more-actions-btn" type="button" hidden aria-haspopup="menu" aria-expanded="false" aria-controls="more-actions-menu" title="更多操作" data-i18n-title="moreActions">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle>
+            </svg>
+          </button>
+          <div id="more-actions-menu" class="more-actions-menu" role="menu" hidden>
+            <button id="download-doc-btn" class="more-action" type="button" role="menuitem" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14"></path>
+              </svg>
+              <span data-i18n="exportResult">下载录制结果</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <section class="case-actionbar" aria-label="用例操作" data-i18n-aria-label="caseActions">
+        <div class="case-action-buttons">
+          <button id="save-current-case-btn" class="btn btn-secondary" disabled>
+            <span class="btn-icon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1 2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+            </span>
+            <span class="btn-label" data-i18n="saveCaseAction">保存用例</span>
+          </button>
+          <div class="copy-task-control">
+            <button id="copy-task-btn" class="btn btn-accent" disabled aria-describedby="copy-task-tooltip">
+              <span class="btn-icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </span>
+              <span data-i18n="agentManualCopy">复制给AI</span>
+            </button>
+            <span class="tooltip copy-task-tooltip">
+              <button class="tooltip-trigger copy-task-info" type="button" aria-label="使用说明" data-i18n-aria-label="copyTaskHelp"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><circle cx="12" cy="8" r="1" fill="currentColor" stroke="none"></circle></svg></button>
+              <span class="tooltip-content" id="copy-task-tooltip" role="tooltip" data-i18n="copyTaskHint">点击“复制给AI”会将当前用例的页面、操作步骤和控件上下文整理为 Markdown 并复制到剪贴板。可粘贴到你使用的 AI 工具中，帮助分析流程或生成自动化脚本。不会复制录制截图；如需截图，请下载录制结果。</span>
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <div class="steps-section-head">
+        <div class="steps-section-title">
+          <h2 data-i18n="operationSteps">操作步骤</h2>
+          <span class="badge" id="step-count">0</span>
+        </div>
+        <!-- Right-aligned, so the LAST child is the fixed anchor: select-all keeps
+             its place and the batch action that exists only while something is
+             selected grows in to its left. Clearing the whole list is a different
+             kind of action from deleting a selection, so it reads as the quiet
+             control at the far left instead of a second peer button. -->
+        <div class="step-batch-actions">
+          <button class="step-clear-btn" id="clear-steps-btn" type="button" disabled data-i18n="clearSteps">清空步骤</button>
+          <button class="btn btn-danger step-batch-delete" id="batch-delete-steps-btn" type="button" disabled data-i18n="deleteSelectedSteps">删除所选</button>
+          <label class="selection-control step-select-all"><input class="selection-checkbox" type="checkbox" id="step-select-all"><span data-i18n="selectAll">全选</span></label>
+        </div>
+      </div>
+
+      <div class="tab-content">
+        <div class="tab-panel active" id="panel-steps">
+          <div class="steps-container" id="steps-container">
+            <div class="empty-state" id="empty-state">
+              <div class="empty-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                </svg>
+              </div>
+              <p data-i18n="emptyStepsPopup">点击「开始录制」，在浏览器标签页中进行操作，即可自动生成操作步骤。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="popup-entry.js"></script>
+</body>
+</html>

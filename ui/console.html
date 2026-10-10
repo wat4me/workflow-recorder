@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="consoleTitle">流程录制 - 用例工作台</title>
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/console.css">
+  <link rel="stylesheet" href="styles/theme-refresh.css">
+</head>
+<body>
+  <div class="console-container">
+    <header class="app-header workbench-header">
+      <div class="logo-area">
+        <div class="logo-icon"><img src="../icons/icon-32.png" alt=""></div>
+        <div class="logo-text">
+          <h1 data-i18n="extensionName">流程录制</h1>
+          <span data-i18n="caseWorkbench">用例工作台</span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="icon-btn settings-btn" id="capture-settings-btn" type="button" title="录制设置" aria-label="录制设置" data-i18n-title="captureSettingsTitle" data-i18n-aria-label="captureSettingsTitle">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>
+          </svg>
+        </button>
+        <button class="icon-btn language-btn" id="language-btn" type="button" title="切换到英文" aria-label="切换到英文">EN</button>
+      </div>
+    </header>
+
+    <main class="console-main workbench-main">
+      <section class="console-panel case-library-panel" id="case-library-panel">
+        <div class="panel-head library-head">
+          <div class="library-title">
+            <h2 data-i18n="caseManagement">用例管理</h2>
+            <span class="badge" id="case-library-count">0</span>
+            <span class="library-subtitle" data-i18n="caseManagementHint">集中查看、分享和导出已保存用例</span>
+          </div>
+          <div class="library-head-actions">
+            <div class="case-search-group">
+              <select id="case-search-scope" aria-label="搜索范围" data-i18n-aria-label="searchScope">
+                <option value="all" data-i18n="allCases">全部用例</option>
+                <option value="current" data-i18n="currentFolder">当前分类</option>
+              </select>
+              <label class="case-search-field">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path>
+                </svg>
+                <input id="case-search-input" type="search" autocomplete="off" placeholder="搜索用例" data-i18n-placeholder="searchCases">
+              </label>
+            </div>
+            <button class="btn btn-secondary" id="import-case-package-btn" type="button" title="导入 .swrcase 用例包到未分类，包含操作步骤和截图；导出文档的 ZIP 不能作为用例导入。" data-i18n-title="importCasePackageHint" data-i18n="importCasePackage">导入用例</button>
+          </div>
+        </div>
+
+        <div class="library-workspace">
+          <aside class="case-folder-sidebar" aria-label="用例文件夹" data-i18n-aria-label="caseFolders">
+            <div class="case-folder-heading" title="拖到其他目录可移入，拖到此标题可移回根目录。最多支持三级。" data-i18n-title="folderDragHint">
+              <span data-i18n="caseFolders">用例文件夹</span>
+              <button class="icon-btn" id="create-case-folder-btn" type="button" title="新建文件夹" aria-label="新建文件夹" data-i18n-title="createFolder" data-i18n-aria-label="createFolder">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+              </button>
+            </div>
+            <p class="case-folder-hint" data-i18n="folderManageHint">拖拽移动 · 更多中重命名</p>
+            <div class="case-folder-list" id="case-folder-list"></div>
+          </aside>
+          <div class="library-content">
+            <div class="library-actionbar">
+              <label class="selection-control library-select-all"><input class="selection-checkbox" type="checkbox" id="case-library-select-all"><span data-i18n="selectAll">全选</span></label>
+              <span class="library-selection" id="case-selection-count" data-i18n="noCaseSelected">未选择用例</span>
+              <div class="library-move-actions">
+                <button class="btn btn-secondary" id="move-cases-folder-btn" type="button" disabled title="将选中的用例移动到指定文件夹。" data-i18n-title="moveCasesHint" data-i18n="moveToFolder">移动至</button>
+              </div>
+              <div class="library-actions">
+                <button class="btn btn-secondary" id="batch-export-cases-btn" type="button" disabled title="将选中的用例导出为包含 Markdown 文档和截图的 ZIP，供阅读或交给 AI；不能重新导入为用例。" data-i18n-title="exportDocumentsHint" data-i18n="batchExport">导出文档</button>
+                <button class="btn btn-accent" id="export-case-package-btn" type="button" disabled title="将选中的用例打包为 .swrcase，包含操作步骤、截图和包内用例关系，可分享给他人导入本插件。" data-i18n-title="exportCasePackageHint" data-i18n="exportCasePackage">分享用例包</button>
+                <button class="btn btn-danger" id="batch-delete-cases-btn" type="button" disabled title="删除选中的用例，确认后不可恢复。" data-i18n-title="deleteCasesHint" data-i18n="delete">删除</button>
+                <input id="case-package-file-input" type="file" accept=".swrcase,.zip,application/zip" hidden>
+              </div>
+            </div>
+
+            <div class="case-library-list" id="case-library-list"></div>
+            <div class="empty-state library-empty" id="case-library-empty" hidden>
+              <div class="empty-icon">
+                <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <path d="M4 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"></path>
+                </svg>
+              </div>
+              <p data-i18n="noSavedCases">暂无保存的用例</p>
+              <span data-i18n="recordCasesInSidePanel">请先在侧边栏完成录制并保存为用例</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="console-panel preview-panel" id="preview-panel" hidden>
+        <div class="panel-head">
+          <button class="btn btn-secondary btn-compact" id="preview-back-btn" data-i18n="backToCaseManagement">返回用例管理</button>
+          <h2 id="preview-title"></h2>
+          <div class="panel-head-actions">
+            <span class="badge" id="preview-step-count">0</span>
+            <span class="preview-readonly-tag" data-i18n="previewReadOnly">只读预览</span>
+            <button type="button" class="btn btn-primary btn-compact" id="preview-continue-btn" data-i18n="continueRecording">继续录制</button>
+          </div>
+        </div>
+        <div class="preview-workspace preview-subview" id="preview-steps-view">
+          <div class="steps-container" id="preview-steps-container">
+            <div class="empty-state" id="preview-empty-state" style="display:none"><p data-i18n="noSteps">暂无录制步骤。</p></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="console-image-preview" id="console-image-preview" hidden>
+      <div class="console-preview-toolbar">
+        <div class="console-preview-title"><strong id="console-preview-title" data-i18n="screenshotPreview">截图预览</strong><span data-i18n="previewHint">←/→ 切换，滚轮缩放，按住拖动</span></div>
+        <div class="console-preview-actions">
+          <button type="button" id="console-prev-image" title="上一张" data-i18n-title="previousScreenshot">←</button>
+          <button type="button" id="console-next-image" title="下一张" data-i18n-title="nextScreenshot">→</button>
+          <button type="button" id="console-zoom-out" title="缩小" data-i18n-title="zoomOut">−</button>
+          <button type="button" id="console-zoom-label" title="点击恢复 100%" data-i18n-title="resetZoom">100%</button>
+          <button type="button" id="console-zoom-in" title="放大" data-i18n-title="zoomIn">+</button>
+          <button type="button" id="console-fit-image" data-i18n="fitWindow">适应窗口</button>
+          <button type="button" id="console-close-preview" data-i18n="close">关闭</button>
+        </div>
+      </div>
+      <div class="console-preview-stage" id="console-preview-stage"><div class="console-preview-loading" id="console-preview-loading" data-i18n="loadingScreenshot">正在读取截图…</div><img id="console-preview-image" alt="" draggable="false"></div>
+    </div>
+  </div>
+
+  <div class="target-tab-modal" id="target-tab-modal" hidden>
+    <div class="target-tab-dialog" role="dialog" aria-modal="true" aria-labelledby="target-tab-title">
+      <div class="target-tab-dialog-head">
+        <div>
+          <h2 id="target-tab-title" data-i18n="selectTargetPage">选择继续录制的页面</h2>
+          <p data-i18n="selectTargetPageHint">请选择要打开侧边栏并继续录制的页面。</p>
+        </div>
+        <button type="button" class="icon-btn" id="target-tab-close" data-i18n-aria-label="cancel" aria-label="取消"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+      <div class="target-tab-list" id="target-tab-list"></div>
+      <div class="target-tab-actions">
+        <button type="button" class="btn btn-secondary" id="target-tab-cancel" data-i18n="cancel">取消</button>
+        <button type="button" class="btn btn-primary" id="target-tab-confirm" disabled data-i18n="continueRecording">继续录制</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="console-entry.js"></script>
+</body>
+</html>

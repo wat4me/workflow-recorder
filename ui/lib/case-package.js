@@ -1,0 +1,301 @@
+/** Portable, re-importable case packages for sharing recorded flows. */
+(function () {
+  if (globalThis.RecorderCasePackage) return;
+
+  const { t } = globalThis.RecorderI18n;
+  const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
+  const { sendRuntimeMessage } = globalThis.RecorderBridge;
+  const { sanitizeExportName, triggerDownload } = globalThis.RecorderExport;
+  const FORMAT = "workflow-recorder-case-package";
+  const VERSION = 1;
+  const MANIFEST_PATH = "workflow-recorder-case-package.json";
+  // Packages exported before the project rename keep their original format ID.
+  const LEGACY_FORMAT = "semantic-workflow-recorder-case-package";
+  const LEGACY_MANIFEST_PATH = `${LEGACY_FORMAT}.json`;
+  const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
+  const MAX_UNPACKED_BYTES = 500 * 1024 * 1024;
+  const MAX_ASSET_BYTES = 25 * 1024 * 1024;
+  const MAX_ENTRIES = 5000;
+
+  function packageError(key, fallback) {
+    return new Error(t(key, [], fallback));
+  }
+
+  function extensionFor(type) {
+    if (type === "image/png") return "png";
+    if (type === "image/webp") return "webp";
+    return "jpg";
+  }
+
+  function uniqueToken() {
+    if (globalThis.crypto?.randomUUID) return crypto.randomUUID().replace(/-/g, "");
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  }
+
+  /** Exports selected saved cases with their actions, lineage and image blobs. */
+  async function exportCasePackage(cases, archiveName) {
+    const archive = await buildCasePackage(cases);
+    if (!archive) return;
+    const fallbackName = cases.length === 1
+      ? cases[0].name
+      : t("sharedCasePackage", [], "共享用例包");
+    triggerDownload(
+      new Blob([archive], { type: "application/zip" }),
+      `${sanitizeExportName(archiveName || fallbackName)}.swrcase`
+    );
+  }
+
+  async function buildCasePackage(cases) {
+    const selected = (cases || []).filter(item => Array.isArray(item?.actions));
+    if (selected.length === 0) return null;
+
+    const files = {};
+    const assets = [];
+    const assetBySourceKey = new Map();
+
+    async function attachAsset(action, keyField, assetField) {
+      const sourceKey = action[keyField];
+      delete action[keyField];
+      if (!sourceKey) return;
+
+      let assetId = assetBySourceKey.get(sourceKey);
+      if (!assetId) {
+        const blob = await globalThis.RecorderBridge.getBlob(sourceKey);
+        if (!blob) {
+          if (keyField === "screenshotKey") {
+            action.screenshotStatus = "failed";
+            action.screenshotErrorReason = "captureFailed";
+          }
+          return;
+        }
+        assetId = `asset-${String(assets.length + 1).padStart(6, "0")}`;
+        const type = /^image\/(?:jpeg|png|webp)$/.test(blob.type) ? blob.type : "image/jpeg";
+        const path = `media/${assetId}.${extensionFor(type)}`;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        files[path] = bytes;
+        assets.push({ id: assetId, path, type, size: bytes.byteLength });
+        assetBySourceKey.set(sourceKey, assetId);
+      }
+      action[assetField] = assetId;
+    }
+
+    const packagedCases = [];
+    for (const source of selected) {
+      const actions = [];
+      for (const sourceAction of source.actions) {
+        const action = structuredClone(sourceAction);
+        await attachAsset(action, "screenshotBeforeKey", "screenshotBeforeAsset");
+        await attachAsset(action, "screenshotKey", "screenshotAsset");
+        actions.push(action);
+      }
+      packagedCases.push({
+        id: String(source.id || `case-${packagedCases.length + 1}`),
+        name: String(source.name || t("unnamedCase", [], "未命名用例")).slice(0, 120),
+        createdAt: Number(source.createdAt) || Date.now(),
+        lineage: source.lineage || null,
+        pages: Array.isArray(source.pages) ? structuredClone(source.pages) : [],
+        actions
+      });
+    }
+
+    const manifest = {
+      format: FORMAT,
+      version: VERSION,
+      appVersion: chrome.runtime.getManifest().version,
+      exportedAt: new Date().toISOString(),
+      cases: packagedCases,
+      assets
+    };
+    files[MANIFEST_PATH] = globalThis.fflate.strToU8(JSON.stringify(manifest, null, 2));
+    return globalThis.fflate.zipSync(files, { level: 6 });
+  }
+
+  function unpackArchive(bytes) {
+    let entryCount = 0;
+    let unpackedBytes = 0;
+    return globalThis.fflate.unzipSync(bytes, {
+      filter(entry) {
+        entryCount++;
+        unpackedBytes += Number(entry.originalSize) || 0;
+        if (entryCount > MAX_ENTRIES || unpackedBytes > MAX_UNPACKED_BYTES) {
+          throw packageError("errorCasePackageTooLarge", "用例包过大，无法导入");
+        }
+        return entry.name === MANIFEST_PATH || entry.name === LEGACY_MANIFEST_PATH || /^media\/[a-z0-9._-]+$/i.test(entry.name);
+      }
+    });
+  }
+
+  function parseManifest(files) {
+    const legacy = !files[MANIFEST_PATH] && !!files[LEGACY_MANIFEST_PATH];
+    const bytes = files[legacy ? LEGACY_MANIFEST_PATH : MANIFEST_PATH];
+    if (!bytes) throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+    let manifest;
+    try {
+      manifest = JSON.parse(globalThis.fflate.strFromU8(bytes));
+    } catch (_) {
+      throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+    }
+    if (manifest?.format !== (legacy ? LEGACY_FORMAT : FORMAT) || manifest.version !== VERSION) {
+      throw packageError("errorUnsupportedCasePackage", "用例包版本不受支持");
+    }
+    if (!Array.isArray(manifest.cases) || manifest.cases.length === 0 || manifest.cases.length > 200) {
+      throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+    }
+    return manifest;
+  }
+
+  function prepareImport(manifest, files) {
+    const stamp = uniqueToken();
+    const assetsById = new Map();
+    for (const asset of manifest.assets || []) {
+      if (
+        !asset || typeof asset.id !== "string" || assetsById.has(asset.id) ||
+        !/^media\/[a-z0-9._-]+$/i.test(asset.path || "") ||
+        !/^image\/(?:jpeg|png|webp)$/.test(asset.type || "") ||
+        !files[asset.path] || files[asset.path].byteLength > MAX_ASSET_BYTES
+      ) {
+        throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+      }
+      assetsById.set(asset.id, {
+        key: `import:${stamp}:${asset.id}`,
+        bytes: files[asset.path],
+        type: asset.type
+      });
+    }
+
+    const sourceCaseIds = new Set();
+    const caseIdMap = new Map();
+    manifest.cases.forEach((source, index) => {
+      const id = String(source?.id || "");
+      if (!id || sourceCaseIds.has(id) || !Array.isArray(source.actions) || !Array.isArray(source.pages)) {
+        throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+      }
+      sourceCaseIds.add(id);
+      caseIdMap.set(id, `case_import_${stamp}_${index + 1}`);
+    });
+
+    const actionIdMap = new Map();
+    let actionCounter = 0;
+    manifest.cases.forEach(source => source.actions.forEach((action, index) => {
+      const sourceId = typeof action?.id === "string" && action.id
+        ? action.id
+        : `${source.id}:${index}`;
+      if (!actionIdMap.has(sourceId)) {
+        actionIdMap.set(sourceId, `step_import_${stamp}_${++actionCounter}`);
+      }
+    }));
+
+    const referencedAssets = new Set();
+    let totalSteps = 0;
+    const importedAt = Date.now();
+    const cases = manifest.cases.map((source, caseIndex) => {
+      totalSteps += source.actions.length;
+      if (source.actions.length > 10000 || totalSteps > 50000) {
+        throw packageError("errorCasePackageTooLarge", "用例包过大，无法导入");
+      }
+      const actions = source.actions.map((sourceAction, actionIndex) => {
+        const action = structuredClone(sourceAction);
+        const oldActionId = typeof action.id === "string" && action.id
+          ? action.id
+          : `${source.id}:${actionIndex}`;
+        action.id = actionIdMap.get(oldActionId);
+        delete action.screenshotBeforeKey;
+        delete action.screenshotKey;
+
+        if (action.screenshotBeforeAsset) {
+          const asset = assetsById.get(action.screenshotBeforeAsset);
+          if (!asset) throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+          referencedAssets.add(action.screenshotBeforeAsset);
+          action.screenshotBeforeKey = asset.key;
+        }
+        if (action.screenshotAsset) {
+          const asset = assetsById.get(action.screenshotAsset);
+          if (!asset) throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+          referencedAssets.add(action.screenshotAsset);
+          action.screenshotKey = asset.key;
+          action.screenshotStatus = "captured";
+          delete action.screenshotError;
+          delete action.screenshotErrorReason;
+          delete action.screenshotSkippedReason;
+        }
+        delete action.screenshotBeforeAsset;
+        delete action.screenshotAsset;
+        return action;
+      });
+
+      const sourceParentId = source.lineage?.parentCaseId;
+      let lineage = null;
+      if (sourceParentId && caseIdMap.has(sourceParentId)) {
+        lineage = structuredClone(source.lineage);
+        lineage.parentCaseId = caseIdMap.get(sourceParentId);
+        if (lineage.forkedFromActionId) {
+          lineage.forkedFromActionId = actionIdMap.get(lineage.forkedFromActionId) || null;
+        }
+      }
+      return {
+        id: caseIdMap.get(source.id),
+        name: String(source.name || t("unnamedCase", [], "未命名用例")).trim().slice(0, 120),
+        createdAt: importedAt + caseIndex,
+        lineage,
+        pages: structuredClone(source.pages),
+        actions
+      };
+    });
+
+    return {
+      cases,
+      assets: [...referencedAssets].map(id => assetsById.get(id))
+    };
+  }
+
+  /** Imports a shared package into history without replacing the open workspace. */
+  async function importCasePackage(file) {
+    const media = globalThis.RecorderMediaStore;
+    const run = () => importCasePackageUnlocked(file);
+    try {
+      return await (media.withWriteLock ? media.withWriteLock(run) : run());
+    } finally {
+      // Retry deletions deferred by the publication lock, after references are
+      // committed or staged blobs have been rolled back.
+      await sendRuntimeMessage({ action: MESSAGE.cleanupScreenshots, force: true }).catch(() => {});
+    }
+  }
+
+  async function importCasePackageUnlocked(file) {
+    if (!file || file.size <= 0) throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+    if (file.size > MAX_ARCHIVE_BYTES) throw packageError("errorCasePackageTooLarge", "用例包过大，无法导入");
+
+    const files = unpackArchive(new Uint8Array(await file.arrayBuffer()));
+    const prepared = prepareImport(parseManifest(files), files);
+    const stagedKeys = [];
+    try {
+      for (const asset of prepared.assets) {
+        await globalThis.RecorderMediaStore.putBlob(asset.key, new Blob([asset.bytes], { type: asset.type }));
+        stagedKeys.push(asset.key);
+      }
+      let response = await sendRuntimeMessage({ action: MESSAGE.importCases, cases: prepared.cases }, 60000);
+      if (!response?.success) {
+        // If the response was lost after the atomic storage commit, do not roll
+        // back image blobs the newly imported cases already reference.
+        const check = await sendRuntimeMessage({ action: MESSAGE.listCases }, 15000);
+        const present = new Set((check?.cases || []).map(item => item.id));
+        if (check?.success && prepared.cases.every(item => present.has(item.id))) {
+          response = { success: true, importedCount: prepared.cases.length };
+        }
+      }
+      if (!response?.success) throw new Error(response?.error || t("importCasesFailed", [], "导入用例失败"));
+      return { importedCount: response.importedCount || prepared.cases.length };
+    } catch (error) {
+      await globalThis.RecorderMediaStore.deleteBlobs(stagedKeys).catch(() => {});
+      throw error;
+    }
+  }
+
+  globalThis.RecorderCasePackage = {
+    exportCasePackage,
+    buildCasePackage,
+    importCasePackage,
+    packageFormat: FORMAT,
+    packageVersion: VERSION
+  };
+})();

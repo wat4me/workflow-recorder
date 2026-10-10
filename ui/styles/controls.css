@@ -1,0 +1,330 @@
+/* ── Buttons ── */
+/* Shared feedback also covers menu items, tabs and dialog buttons, without
+   changing their layout or overriding selected/success state colors. */
+button {
+  transition: background-color 150ms ease, border-color 150ms ease,
+    color 150ms ease, box-shadow 150ms ease, translate 150ms ease;
+}
+
+button:enabled:hover {
+  box-shadow: inset 0 0 0 100vmax var(--control-hover-overlay), var(--shadow-sm);
+}
+
+button:enabled:active {
+  box-shadow: inset 0 0 0 100vmax var(--control-pressed-overlay);
+}
+
+button:enabled:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--button-border, var(--border-color));
+  background: var(--button-bg, var(--bg-primary));
+  color: var(--button-text, var(--text-secondary));
+  box-shadow: var(--shadow-xs);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  padding: 8px 14px;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  min-height: 34px;
+  vertical-align: middle;
+}
+
+.btn > span:not(.btn-icon),
+.btn .btn-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 16px;
+  line-height: 1;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.btn svg,
+.icon-btn svg {
+  display: block;
+}
+
+:is(.btn, .icon-btn):disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+:is(.btn, .icon-btn):enabled:hover {
+  background: var(--button-hover-bg, var(--accent-light));
+  border-color: var(--button-hover-border, var(--accent-color));
+  color: var(--button-hover-text, var(--button-text, var(--accent-color)));
+  translate: 0 -1px;
+}
+
+:is(.btn, .icon-btn):enabled:active {
+  translate: 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+
+  :is(.btn, .icon-btn):enabled:hover {
+    translate: none;
+  }
+}
+
+.btn-secondary.success {
+  --button-bg: var(--success-light);
+  --button-text: var(--success-text);
+  --button-border: var(--success-border);
+  --button-hover-bg: var(--success-subtle);
+  --button-hover-border: var(--success-text);
+}
+
+.btn-primary.start-state {
+  --button-bg: #16a34a;
+  --button-text: #ffffff;
+  --button-border: #16a34a;
+  --button-hover-bg: #15803d;
+  --button-hover-text: #ffffff;
+  --button-hover-border: #15803d;
+  box-shadow: 0 2px 6px rgba(22, 163, 74, 0.2);
+}
+
+.btn-primary.recording-state,
+.btn-danger {
+  --button-bg: var(--danger-light);
+  --button-text: var(--danger-color);
+  --button-border: var(--danger-border);
+  --button-hover-bg: var(--danger-subtle);
+  --button-hover-border: var(--danger-color);
+}
+
+.btn-primary.recording-state .btn-icon {
+  animation: pulse-icon 1.6s infinite ease-in-out;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-accent {
+  --button-bg: var(--accent-color);
+  --button-text: #ffffff;
+  --button-border: var(--accent-color);
+  --button-hover-bg: var(--accent-hover);
+  --button-hover-text: #ffffff;
+  --button-hover-border: var(--accent-hover);
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.18);
+}
+
+/* ── Recording controls ── */
+.recorder-header {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.recorder-meta-row {
+  display: contents;
+}
+
+.header-utilities {
+  display: flex;
+  align-items: center;
+  grid-column: 3;
+  grid-row: 1;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.workspace-btn {
+  width: auto;
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.header-record-actions {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.control-panel,
+.control-panel .btn {
+  height: 100%;
+  min-height: 40px;
+}
+
+.record-actions {
+  display: flex;
+  gap: 6px;
+  /* Size the toolbar from its controls instead of inheriting the panel height. */
+  height: auto;
+}
+
+.header-record-actions .btn {
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manual-screenshot-btn[hidden] {
+  display: none;
+}
+
+.record-actions .btn {
+  flex: 1;
+  min-width: 0;
+}
+
+.header-record-actions .manual-screenshot-btn,
+.header-record-actions .download-doc-btn {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.header-record-actions .compact-download-btn {
+  display: none;
+}
+
+.header-record-actions .manual-screenshot-btn.icon-only,
+.header-record-actions .compact-download-btn.icon-only {
+  width: 36px;
+  padding: 0;
+}
+
+.header-record-actions .compact-download-btn[hidden],
+.manual-screenshot-btn.icon-only .btn-label,
+.compact-download-btn.icon-only .btn-label {
+  display: none;
+}
+
+.header-record-actions .more-actions-wrap {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.header-record-actions .more-actions-btn {
+  width: 36px;
+  height: 36px;
+}
+
+.more-actions-btn[hidden],
+.more-actions-menu[hidden],
+.more-action[hidden] {
+  display: none;
+}
+
+.more-actions-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  padding: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+}
+
+.more-action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.more-action:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.more-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* A narrow side panel gets one compact toolbar row so the step list retains as
+   much vertical space as possible. The primary action keeps its icon and text. */
+@media (max-width: 560px) {
+  .recorder-header {
+    grid-template-columns: minmax(0, 360px) minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .header-record-actions {
+    gap: 4px;
+  }
+
+  .header-utilities {
+    grid-column: 3;
+    gap: 4px;
+  }
+
+  .header-record-actions .btn {
+    min-height: 36px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+
+  .header-record-actions .compact-download-btn {
+    display: inline-flex;
+  }
+
+  .header-record-actions .more-actions-wrap {
+    display: none;
+  }
+}
+
+/* The header holds the recording action plus four utilities. Below this width the
+   workbench button gives up its label -- it keeps its icon, title and aria-label --
+   so the recording settings stay reachable instead of being pushed off-screen. */
+@media (max-width: 380px) {
+  .workspace-btn {
+    width: 30px;
+    padding: 0;
+  }
+
+  .workspace-btn > span {
+    display: none;
+  }
+}

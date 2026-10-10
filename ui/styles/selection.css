@@ -1,0 +1,85 @@
+.selection-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.selection-control > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 14px;
+  line-height: 14px;
+}
+
+.selection-checkbox {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  margin: 0;
+  flex: 0 0 14px;
+  vertical-align: middle;
+  border: 1px solid var(--border-hover);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: #fff;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.selection-checkbox::before {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border: solid currentColor;
+  border-width: 0 0 2px 2px;
+  opacity: 0;
+  transform: translateY(-1px) rotate(-45deg) scale(0.7);
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.selection-checkbox:hover:not(:disabled) {
+  border-color: var(--accent-color);
+}
+
+.selection-checkbox:checked,
+.selection-checkbox:indeterminate {
+  border-color: var(--accent-color);
+  background: var(--accent-color);
+}
+
+.selection-checkbox:checked::before {
+  opacity: 1;
+  transform: translateY(-1px) rotate(-45deg) scale(1);
+}
+
+.selection-checkbox:indeterminate::before {
+  width: 7px;
+  height: 0;
+  border-width: 0 0 2px;
+  opacity: 1;
+  transform: none;
+}
+
+.selection-checkbox:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.selection-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selection-checkbox,
+  .selection-checkbox::before {
+    transition: none;
+  }
+}

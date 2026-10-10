@@ -1,0 +1,991 @@
+/* ── Steps Section ── */
+/* Section bars share one card language. This strip frames the same kind of thing
+   the artifact bar above does -- a title plus the controls for the list under it --
+   so the step cards are not sandwiched between a card and a bare row.
+   The 1px border plus 10px padding puts this title on the artifact bar's left edge. */
+.steps-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+.steps-section-head h2 {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.steps-section-head .badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent-light);
+  color: var(--accent-color);
+  min-width: 20px;
+  text-align: center;
+}
+
+/* ── Tab Panels ── */
+.tab-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.tab-panel {
+  display: none;
+  height: 100%;
+  overflow: hidden;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+#panel-steps.active {
+  display: flex;
+  flex-direction: column;
+}
+
+#panel-steps .steps-container {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+/* ── Steps Container ── */
+.steps-container {
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 2px;
+}
+
+.steps-container::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.steps-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.steps-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.steps-container::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ── Empty State ── */
+/* Needed because the `display` below beats the UA rule behind `hidden`. */
+.empty-state[hidden] {
+  display: none;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px;
+  gap: 10px;
+}
+
+.empty-icon {
+  opacity: 0.35;
+  color: var(--text-faint);
+}
+
+.empty-state p {
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 280px;
+}
+
+/* ── Step Card ── */
+.step-card {
+  --step-header-height: 24px;
+  --step-index-size: 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  transition: var(--transition-fast);
+  /* Anchors the connector below. */
+  position: relative;
+  /* Where the connector meets the number badge: left padding + half of the 18px
+     badge. A variable rather than a literal because the console pads its cards
+     wider, and the two values have to stay related rather than merely both exist. */
+  --step-connector-left: 19px;
+}
+
+.step-card.is-selected {
+  border-color: var(--accent-color);
+  background: var(--accent-light);
+}
+
+.step-card.has-selection {
+  --step-connector-left: 40px;
+}
+
+.step-select-checkbox {
+  /* Align the leading controls to the header, not the full card height. */
+  margin-top: calc((var(--step-header-height) - 14px) / 2);
+}
+
+@media (max-width: 380px) {
+  .steps-section-head {
+    flex-wrap: wrap;
+    padding-block: 4px;
+  }
+}
+
+.step-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+/*
+ * Connects each step's number to the next one's, so a recording reads as one
+ * ordered flow instead of a stack of unrelated cards. Drawn from the card rather
+ * than between them because the cards are laid out with a flex gap and there is no
+ * element in it: the line spans the card's bottom border plus that gap.
+ *
+ * The numbers stay. A line is a second way of showing order, not the only one, so
+ * the sequence survives a screen reader and a high-contrast mode that drops it.
+ */
+.step-card:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: var(--step-connector-left);
+  top: 100%;
+  width: 1px;
+  /* The card's bottom border plus the 6px container gap, with 1px of overlap into
+     the next card so the join reads as continuous. */
+  height: 8px;
+  background: var(--border-color);
+}
+
+.step-index {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  width: var(--step-index-size);
+  height: var(--step-index-size);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: calc((var(--step-header-height) - var(--step-index-size)) / 2);
+  line-height: 1;
+}
+
+/* Where the flow currently ends. During a recording this is the step just taken,
+   which is the one the user is looking for. Scoped to the recording state: on a
+   saved case the filled circle reads as "selected", which it is not. */
+.steps-container.is-recording .step-card:last-child .step-index {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.step-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: var(--step-header-height);
+  gap: 8px;
+}
+
+.step-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.step-type-badge,
+.step-page-tag,
+.step-status-tag {
+  height: 20px;
+  line-height: 16px;
+}
+
+.step-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: var(--transition-fast);
+  flex-shrink: 0;
+  opacity: 1;
+}
+
+.step-delete-btn:hover {
+  background: var(--danger-light);
+  color: var(--danger-color);
+}
+
+.step-type-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.step-type-badge.click {
+  background: var(--accent-light);
+  color: var(--accent-color);
+}
+
+.step-type-badge.type {
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+
+.step-type-badge.select {
+  background: #fce7f3;
+  color: #db2777;
+}
+
+.step-type-badge.navigate {
+  /* The green pair the capture tag beside it uses, so a navigate card does not
+     show two almost-identical greens in one header row. */
+  background: var(--success-subtle);
+  color: var(--success-text);
+}
+
+.step-type-badge.newpage {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+
+.step-type-badge.presskey {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.step-type-badge.hover {
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.step-type-badge.drag {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.step-page-tag {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-weight: 600;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/*
+ * Capture status. Sits in the meta row so it can change several times per step
+ * without moving anything: the tag has a fixed height and the row is already
+ * there, whether or not a status is being shown.
+ */
+.step-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-secondary);
+  color: var(--text-faint);
+  border: 1px solid var(--border-color);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.step-status-tag[hidden] {
+  display: none;
+}
+
+.step-status-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.step-status-tag.pending::before,
+.step-status-tag.skipped::before {
+  background: var(--text-faint);
+}
+
+.step-status-tag.capturing-auto,
+.step-status-tag.capturing-manual,
+.step-status-tag.recapturing {
+  color: var(--accent-color);
+  background: var(--accent-light);
+  border-color: transparent;
+}
+
+/* The dot spins rather than pulses: a capture is short, and a pulse at that
+   duration reads as a rendering glitch. */
+.step-status-tag.capturing-auto::before,
+.step-status-tag.capturing-manual::before,
+.step-status-tag.recapturing::before {
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  width: 8px;
+  height: 8px;
+  animation: step-status-spin 0.8s linear infinite;
+}
+
+@keyframes step-status-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-status-tag.capturing-auto::before,
+  .step-status-tag.capturing-manual::before,
+  .step-status-tag.recapturing::before {
+    animation: none;
+  }
+}
+
+.step-status-tag.captured {
+  color: var(--success-text);
+  background: var(--success-subtle);
+  border-color: transparent;
+}
+
+.step-status-tag.failed,
+.step-status-tag.recapture-failed {
+  color: var(--danger-color);
+  background: var(--danger-light);
+  border-color: transparent;
+}
+
+/* A re-capture keeps the previous screenshot on screen. Dimming it says "this is
+   about to be replaced" without removing the only image the step has. */
+.step-media.is-recapturing {
+  opacity: 0.55;
+}
+
+.step-media.is-recapture-failed {
+  outline: 1px solid var(--danger-color);
+  outline-offset: 1px;
+}
+
+.step-description {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.step-media {
+  display: flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  font-family: inherit;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: zoom-in;
+}
+
+/*
+ * The before/after frame pair. Two slots with an arrow between; the arrow and the
+ * "before"/"after" captions only show when both frames exist, so a single-frame
+ * step still reads as one plain thumbnail.
+ */
+.step-media-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+  max-width: 100%;
+}
+
+.step-media-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.step-media-caption {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+.step-media-arrow {
+  align-self: center;
+  color: var(--text-faint);
+  font-size: 13px;
+  padding-bottom: 16px;
+}
+
+.step-media-row .is-hidden {
+  display: none;
+}
+
+.step-media.is-loading,
+.step-media.is-missing {
+  justify-content: center;
+  width: 96px;
+  height: 54px;
+  padding: 4px 7px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  cursor: default;
+}
+
+.step-media.is-missing {
+  color: var(--danger-color);
+}
+
+.step-screenshot {
+  display: block;
+  width: 96px;
+  height: 54px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  object-position: top left;
+  background: var(--bg-tertiary);
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  background: var(--overlay-backdrop);
+  backdrop-filter: blur(3px);
+}
+
+.image-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 46px;
+  padding: 7px 44px 7px 10px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.image-preview-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.image-preview-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.image-preview-tool {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  /* Longhands, not the `font` shorthand: `inherit` is a CSS-wide keyword and
+     cannot be combined with a size or weight, so `font: 600 11px/1 inherit`
+     is dropped whole and the button falls back to the UA default. */
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-preview-tool[hidden],
+.image-preview-full[hidden],
+.image-preview-message[hidden] {
+  display: none;
+}
+
+.image-preview-tool:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.image-preview-message {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.image-preview-tool:hover:not(:disabled),
+.image-preview-tool:focus-visible {
+  border-color: var(--accent-color);
+  background: var(--accent-light);
+  color: var(--accent-color);
+  outline: none;
+}
+
+.image-preview-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.image-preview-stage.is-dragging {
+  cursor: grabbing;
+}
+
+.image-preview-full {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  max-height: none;
+  transform-origin: 0 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+  will-change: transform;
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 7px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: 24px/1 Arial, sans-serif;
+  cursor: pointer;
+}
+
+.image-preview-close:hover,
+.image-preview-close:focus-visible {
+  background: var(--accent-light);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  outline: none;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--overlay-backdrop);
+  backdrop-filter: blur(2px);
+}
+
+.confirm-dialog {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  width: min(360px, 100%);
+  padding: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+}
+
+.confirm-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent-light);
+  color: var(--accent-color);
+}
+
+.confirm-icon.danger {
+  background: var(--danger-light);
+  color: var(--danger-color);
+}
+
+.confirm-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.confirm-content h3 {
+  margin: 1px 0 6px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.confirm-content p {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.confirm-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.confirm-actions button {
+  min-width: 70px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.confirm-actions .confirm-submit {
+  border-color: var(--accent-subtle);
+  background: var(--accent-light);
+  color: var(--accent-color);
+}
+
+.confirm-actions .confirm-submit.danger {
+  border-color: var(--danger-border);
+  background: var(--danger-light);
+  color: var(--danger-color);
+}
+
+.save-recording-dialog {
+  width: min(430px, 100%);
+}
+
+.steps-section-title,
+.step-batch-actions {
+  display: flex;
+  align-items: center;
+}
+
+.steps-section-title {
+  gap: 8px;
+}
+
+/* Right-aligned, which makes the LAST child the fixed anchor: select-all keeps its
+   place, and the batch action that only exists while something is selected grows in
+   to its left. Keep the delete button first in the markup for that reason. */
+.step-batch-actions {
+  gap: 7px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.step-select-all {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Selecting is a transient state, not a permanent toolbar: until the user picks a
+   step, the row carries the title and the select-all control and nothing else. */
+.step-batch-actions .btn {
+  display: none;
+}
+
+.steps-section-head.is-selecting .step-batch-actions .btn {
+  display: inline-flex;
+}
+
+/* No steps yet, so there is nothing to select. */
+.steps-section-head.is-empty .step-batch-actions {
+  display: none;
+}
+
+/* The batch action is sized to the row it lives in, not to .btn's own 34px: at its
+   natural height the section head is the same height whether or not something is
+   selected, so showing the delete button does not make the card grow. It shares
+   this geometry with the clear control beside it -- same height, radius, weight and
+   no shadow -- so the two read as one row of controls that differ only in colour.
+   Left to the .btn defaults it came out 17px tall and colour-filled beside a 27px
+   outlined button, which is two systems in one row. */
+.step-batch-actions .btn {
+  width: auto;
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  box-shadow: none;
+}
+
+/* The panel's danger colour, in this row's outline form rather than the filled
+   chip the workbench's actionbars use. */
+.step-batch-actions .btn-danger {
+  --button-bg: var(--bg-primary);
+  --button-text: var(--danger-color);
+  --button-border: var(--danger-border);
+  --button-hover-bg: var(--danger-light);
+  --button-hover-border: var(--danger-color);
+}
+
+/* promptText has no leading icon, so its content must occupy the full dialog. */
+.prompt-text-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.prompt-text-dialog .confirm-content,
+.prompt-text-dialog .recording-name-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.prompt-text-dialog .confirm-content h3 {
+  margin-bottom: 8px;
+  font-size: 16px;
+}
+
+.prompt-text-dialog .recording-name-field {
+  margin-top: 14px;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.prompt-text-dialog .recording-name-field input {
+  height: 40px;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.prompt-text-dialog .confirm-actions {
+  width: 100%;
+  margin-top: 0;
+}
+
+.recording-name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.recording-name-field input {
+  width: 100%;
+  height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  outline: none;
+}
+
+.recording-name-field input:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.confirm-actions.three-actions {
+  flex-wrap: wrap;
+}
+
+.confirm-actions .confirm-discard {
+  border-color: #fca5a5;
+  color: var(--danger-color);
+}
+
+/* ── A recording made without screenshots ── */
+/* The frame rows would say the same thing on every card, so the list is flagged
+   as a whole and one note explains it. A single step without a screenshot keeps
+   its own placeholder. */
+.steps-container.screenshots-disabled .step-media-row {
+  display: none;
+}
+
+.steps-screenshots-disabled {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ── Recording settings ── */
+/* No leading icon here either, and the content is the tallest dialog in the
+   extension: it is capped to the viewport and scrolls, with the buttons pinned
+   so a narrow side panel can still reach them. */
+.capture-settings-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 32px);
+}
+
+.capture-settings-dialog .confirm-content {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.capture-settings-dialog .confirm-actions {
+  width: 100%;
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.capture-screenshots-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.capture-settings-hint,
+.capture-settings-footnote {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.capture-settings-footnote {
+  margin-top: 12px;
+}
+
+/* Clearing the workspace sits beside the step list but is not a peer of the
+   selection delete: it is the neutral control of the row, and only the selection
+   delete wears the danger colour -- and only while something is selected. Both use
+   the geometry above so the row reads as one set. */
+.step-clear-btn {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.step-clear-btn:hover:not(:disabled) {
+  border-color: var(--danger-color);
+  background: var(--danger-light);
+  color: var(--danger-color);
+}
+
+.step-clear-btn:disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+  opacity: 0.6;
+}

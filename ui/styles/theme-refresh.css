@@ -1,0 +1,86 @@
+@import url("./tokens.css");
+@import url("./unified-pages.css");
+/* Shared visual refresh: quiet canvas, clear hierarchy, restrained actions. */
+
+body { background: var(--bg-secondary); color: var(--text-primary); font-family: var(--font-ui); font-size: 13px; line-height: 1.5; }
+.app-container svg[stroke="currentColor"], .console-container svg[stroke="currentColor"] { stroke-width: var(--icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.app-header { background: #fff; box-shadow: 0 1px 0 var(--border-color); }
+.app-main { background: transparent; }
+.console-panel, .case-library-panel, .preview-panel, .execution-records-panel {
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.panel-head { border-bottom-color: var(--border-color); }
+.panel-head h2, .library-title h2 { color: var(--text-primary); letter-spacing: -.02em; }
+.library-subtitle, .case-folder-hint { color: var(--text-muted); }
+.btn, .icon-btn, input, select, textarea { border-radius: var(--radius-sm); }
+.btn { min-height: 34px; box-shadow: var(--shadow-xs); }
+.btn-primary, .btn-accent { box-shadow: 0 3px 8px rgb(79 70 229 / 20%); }
+.case-folder-sidebar { background: #fbfcfe; border-right-color: var(--border-color); }
+.library-actionbar { background: #fbfcfe; border-bottom-color: var(--border-color); }
+.empty-state { background: #fbfcfe; border: 1px dashed var(--border-hover); border-radius: var(--radius-md); }
+
+/* Workspace shell and library: a quiet rail and a scannable list. */
+.console-container { max-width: none; }
+.workbench-header { padding-inline: 28px; min-height: 68px; }
+.logo-text span { color: var(--text-muted); letter-spacing: .06em; }
+.library-head { padding-block: 18px; }
+.library-title { flex-wrap: wrap; }
+.library-title h2 { font-size: 20px; font-weight: 650; }
+.library-subtitle { font-size: 12px; white-space: normal; }
+.case-folder-heading { font-size: 12px; color: var(--text-secondary); font-weight: 600; letter-spacing: 0; }
+.case-folder-hint { font-size: 11px; }
+.case-folder-button.is-active { background: var(--accent-light); box-shadow: inset 3px 0 var(--accent-color); }
+.library-item { margin-bottom: 0; min-height: 78px; border: 0; border-bottom: 1px solid var(--border-color); border-radius: 0; padding: 12px; }
+.library-item:hover { background: #f8faff; box-shadow: none; }
+.library-item.is-selected { background: var(--accent-light); box-shadow: inset 3px 0 var(--accent-color); }
+.library-item-info:enabled:hover { box-shadow: none; }
+.library-item-info strong { font-size: 14px; font-weight: 600; }
+.library-item-info span, .library-selection { color: var(--text-muted); font-size: 12px; }
+.case-library-list { padding: 0 16px; }
+.case-search-field { background: #fff; }
+.empty-icon { opacity: 1; color: var(--accent-color); padding: 14px; background: var(--accent-light); border-radius: 16px; }
+.empty-state p { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.empty-state > span { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.preview-readonly-tag { color: var(--text-muted); }
+
+/* Sidebar: one content surface, clear field labels and a compact toolbar. */
+.ai-sidebar { padding: 16px; box-shadow: var(--shadow-xs); }
+.ai-sidebar h2 { font-size: 17px; letter-spacing: -.02em; }
+.ai-sidebar.is-idle #ai-sidebar-status { color: var(--text-muted); }
+#ai-explore-form label { color: var(--text-primary); font-size: 13px; margin-top: 16px; }
+#ai-explore-form :is(input, select, textarea) { font-size: 13px; line-height: 1.5; border-color: var(--border-hover); }
+.ai-sidebar .ai-sidebar-hint { font-size: 12px; line-height: 1.65; }
+.ai-explore-target { border-block: 1px solid var(--border-color); padding-block: 8px; }
+#ai-explore-tabs { color: var(--accent-color); background: var(--accent-light); border-color: var(--accent-subtle); }
+#ai-explore-start, #ai-sidebar-complete-takeover, #preview-ai-btn {
+  --button-bg: var(--accent-color); --button-border: var(--accent-color); --button-text: white;
+  --button-hover-bg: var(--accent-hover); --button-hover-text: white; --button-hover-border: var(--accent-hover);
+}
+/* Both bars title the section under them, so they share one size, one weight and,
+   with the section head's matching inline padding, one left edge. */
+.export-name-field > span,
+.steps-section-head h2 { color: var(--text-primary); font-size: 12px; font-weight: 600; }
+.step-card { box-shadow: none; }
+
+/* Form controls retain normal weight, independently of their parent labels. */
+input, select, textarea { accent-color: var(--accent-color); }
+input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1; }
+button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn, .icon-btn, input, select, textarea { transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease, color .16s ease, transform .12s ease; }
+  .execution-panel:not([hidden]) { animation: panel-enter .18s ease-out; }
+}
+@keyframes panel-enter { from { opacity: .5; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@media (max-width: 700px) {
+  .workbench-header { padding-inline: 12px; }
+  .library-head { padding-block: 12px; }
+  .ai-sidebar { padding: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  button:enabled:active, .execution-record:hover { transform: none; }
+}

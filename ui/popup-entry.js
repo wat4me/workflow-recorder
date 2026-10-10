@@ -1,0 +1,17 @@
+import "../shared/protocol.js";
+import "../shared/i18n.js";
+import "../shared/capture-settings.js";
+import "../vendor/fflate.js";
+import "../shared/media-store.js";
+import "./lib/dom.js";
+import "./lib/doc-generator.js";
+import "./lib/bridge.js";
+import "./lib/dialogs.js";
+import "./lib/settings-dialog.js";
+import "./lib/consent.js";
+import "./lib/export.js";
+import "./lib/image-preview.js";
+import "./lib/capture-state.js";
+import "./app/step-view.js";
+import "./app/recorder-panel.js";
+import "./popup.js";
