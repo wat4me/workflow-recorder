@@ -88,6 +88,11 @@ export function createCaseManager({
     const blocked = await blockedReason();
     if (blocked) return { success: false, error: blocked };
 
+    if (name != null && (typeof name !== "string" || name.length > 120)) {
+      return { success: false, error: t("errorInvalidCaseName", [], "请输入 1–120 个字符的用例名称") };
+    }
+    name = name?.trim();
+
     if (folderId !== null && (typeof folderId !== "string" || !folderId)) {
       return { success: false, error: t("errorFolderNotFound", [], "文件夹不存在") };
     }
@@ -453,6 +458,25 @@ export function createCaseManager({
     return { success: true, removedCount: result.removedCount };
   }
 
+  async function renameCase(caseId, name) {
+    const blocked = await blockedReason();
+    if (blocked) return { success: false, error: blocked };
+    if (typeof name !== "string" || !name.trim() || name.length > 120) {
+      return { success: false, error: t("errorInvalidCaseName", [], "请输入 1–120 个字符的用例名称") };
+    }
+    const index = await caseStore.readIndex();
+    const entry = index.find(item => item.id === caseId);
+    if (!entry) return { success: false, error: t("errorCaseNotFound", [], "用例不存在") };
+    const renamed = { ...entry, name: name.trim() };
+    const origin = await readOrigin();
+    await chrome.storage.local.set({
+      [caseStore.INDEX_KEY]: index.map(item => item.id === caseId ? renamed : item),
+      ...(origin?.caseId === caseId && !origin.deleted
+        ? { [ORIGIN_KEY]: { ...origin, caseNameSnapshot: renamed.name } } : {})
+    });
+    return { success: true, case: renamed };
+  }
+
   async function moveToFolder(caseIds, folderId) {
     const blocked = await blockedReason();
     if (blocked) return { success: false, error: blocked };
@@ -615,6 +639,7 @@ export function createCaseManager({
     // Unqueued like the other reads: it changes nothing, and a confirmation dialog
     // must not have to wait behind a large save to appear.
     previewRemoval,
+    rename: (caseId, name) => queueCaseWrite(() => renameCase(caseId, name)),
     remove: caseId => queueCaseWrite(() => removeCase(caseId)),
     removeMany: caseIds => queueCaseWrite(() => removeCases(caseIds)),
     removeFolder: folderId => queueCaseWrite(() => removeFolder(folderId)),

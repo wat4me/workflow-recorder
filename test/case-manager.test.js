@@ -752,3 +752,46 @@ test("an unreadable-case query cannot overwrite a concurrent case save", async (
   assert.equal(storage.data.caseIndex.find(entry => entry.id === "damaged").readable, false);
   assert.equal(storage.data.caseIndex.filter(entry => entry.name === "New").length, 1);
 });
+
+
+test("renaming preserves case content, placement and workspace while updating its current name", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("rename-step", { screenshotKey: "shot:rename" })]);
+  const folder = await cases.createFolder("Saved flows");
+  const saved = await cases.save("Original", false, folder.folder.id);
+  const before = structuredClone(storage.data);
+  const result = await cases.rename(saved.case.id, "  New name  ");
+  assert.equal(result.success, true);
+  assert.equal((await cases.getDetails(saved.case.id)).case.name, "New name");
+  assert.equal(storage.data.workspaceOrigin.caseNameSnapshot, "New name");
+  const expected = structuredClone(before);
+  expected.caseIndex[0].name = "New name";
+  expected.workspaceOrigin.caseNameSnapshot = "New name";
+  assert.deepEqual(storage.data, expected);
+  for (const invalid of ["", "   ", "x".repeat(121), null]) {
+    assert.equal((await cases.rename(saved.case.id, invalid)).success, false);
+    assert.deepEqual(storage.data, expected);
+  }
+  assert.equal((await cases.rename("missing", "Another name")).success, false);
+  assert.deepEqual(storage.data, expected);
+});
+
+test("renaming is refused when the case store is read only", async () => {
+  const { cases, storage } = await setup({ writable: false });
+  seedCase(storage, { id: "read-only", actions: [action("step")] });
+  const before = structuredClone(storage.data);
+  assert.equal((await cases.rename("read-only", "Changed")).success, false);
+  assert.deepEqual(storage.data, before);
+});
+
+
+test("saving rejects overlong and non-text names before changing storage", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("name-limit")]);
+  const before = structuredClone(storage.data);
+  for (const name of ["x".repeat(121), 123, { name: "invalid" }]) {
+    assert.equal((await cases.save(name)).success, false);
+    assert.deepEqual(storage.data, before);
+  }
+  assert.equal((await cases.save("x".repeat(120))).success, true);
+});

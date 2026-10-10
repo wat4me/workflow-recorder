@@ -2787,3 +2787,150 @@ test("import publication survives cleanup and IndexedDB writes reject an aborted
   assert.match(deleteAborted, /aborted/);
   assert.equal(await page.evaluate(async () => !!await RecorderMediaStore.getBlob("delete-abort-test")), true);
 });
+
+
+test("workbench renames a case without losing its folder, selection or loaded workspace", async (t) => {
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const url = `chrome-extension://${worker.url().split("/")[2]}/ui/console.html`;
+  await page.goto(url);
+  const send = request => page.evaluate(request => chrome.runtime.sendMessage(request), request);
+  await send({ action: "getSchemaState" });
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN" }));
+  await writeActions(worker, [{ id: "rename-step", type: "click", timestamp: 1, pageName: "page1",
+    target: { tagName: "button", accessibleName: "Confirm" } }]);
+  const folder = await send({ action: "createCaseFolder", name: "重命名测试" });
+  const saved = await send({ action: "saveCase", name: "原用例", folderId: folder.folder.id });
+  await page.locator(`#all-cases-btn`).click();
+  const row = page.locator(`[data-case-id="${saved.case.id}"]`);
+  await row.locator('input[type="checkbox"]').check();
+  await row.locator(".rename").click();
+  assert.equal(await page.locator(".prompt-text-dialog input").inputValue(), "原用例");
+  await page.locator(".prompt-text-dialog input").fill("取消后的名称");
+  await page.locator(".confirm-cancel").click();
+  assert.equal((await send({ action: "getCaseDetails", caseId: saved.case.id })).case.name, "原用例");
+  await row.locator(".rename").click();
+  await page.locator(".prompt-text-dialog input").evaluate(input => {
+    input.select();
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", "长".repeat(100000));
+    input.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }));
+  });
+  assert.equal((await page.locator(".prompt-text-dialog input").inputValue()).length, 120);
+  assert.equal(await page.locator(".name-length-counter").innerText(), "120 / 120");
+  await page.locator(".prompt-text-dialog input").fill("   ");
+  await page.locator(".confirm-submit").click();
+  assert.equal(await page.locator(".prompt-text-dialog").isVisible(), true);
+  assert.equal(await page.locator(".prompt-text-dialog input").getAttribute("aria-invalid"), "true");
+  assert.equal(await page.locator("#prompt-validation-error").isVisible(), true);
+  assert.equal((await send({ action: "getCaseDetails", caseId: saved.case.id })).case.name, "原用例");
+  await page.locator(".prompt-text-dialog input").fill("  新用例名称  ");
+  await page.locator(".prompt-text-dialog input").press("Enter");
+  await page.waitForFunction(id => document.querySelector(`[data-case-id="${id}"] strong`)?.textContent === "新用例名称", saved.case.id);
+  assert.equal(await row.locator('input[type="checkbox"]').isChecked(), true);
+  assert.equal(await row.locator("strong").getAttribute("title"), "新用例名称");
+  await page.locator("#case-search-input").fill("不存在的名称");
+  assert.equal(await page.locator("#batch-delete-cases-btn").isDisabled(), true);
+  await page.locator("#case-search-input").fill("");
+  assert.equal(await row.locator('input[type="checkbox"]').isChecked(), false);
+  await row.locator('input[type="checkbox"]').check();
+  await page.locator('[data-folder-id="unfiled"] .case-folder-button').click();
+  assert.equal(await page.locator(".library-item").count(), 0);
+  assert.equal(await page.locator("#batch-delete-cases-btn").isDisabled(), true);
+  await page.locator("#all-cases-btn").click();
+  assert.equal(await row.locator('input[type="checkbox"]').isChecked(), false);
+  const listed = await send({ action: "listCases" });
+  assert.equal(listed.cases.length, 1);
+  assert.equal(listed.cases[0].folderId, folder.folder.id);
+  assert.equal((await send({ action: "getCaseDetails", caseId: saved.case.id })).case.actions[0].id, "rename-step");
+  await page.reload();
+  await page.locator("#all-cases-btn").click();
+  await page.waitForFunction(id => document.querySelector(`[data-case-id="${id}"] strong`)?.textContent === "新用例名称", saved.case.id);
+  await page.evaluate(() => RecorderI18n.setLanguage("en"));
+  await page.reload();
+  await page.locator("#all-cases-btn").click();
+  await page.getByRole("button", { name: "Rename case “新用例名称”", exact: true }).click();
+  assert.equal(await page.locator(".prompt-text-dialog input").inputValue(), "新用例名称");
+  await page.locator(".confirm-cancel").click();
+  await worker.evaluate(() => chrome.storage.local.set({ activeCaseId: null }));
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await popup.locator(".step-card").waitFor();
+  await popup.locator("#more-actions-btn").click();
+  const downloaded = popup.waitForEvent("download");
+  await popup.locator("#download-doc-btn").click();
+  await downloaded;
+  const afterDownload = await send({ action: "listCases" });
+  assert.equal(afterDownload.cases.length, 2);
+  assert.ok(afterDownload.cases.every(item => item.folderId === folder.folder.id));
+  assert.ok(afterDownload.cases.every(item => item.name === "新用例名称"));
+  assert.deepEqual(errors, []);
+});
+
+
+test("offscreen screenshots release object URLs and reload when revisited", async (t) => {
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 360, height: 720 });
+  await page.addInitScript(() => {
+    globalThis.liveImageUrls = new Set();
+    const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = blob => { const url = create(blob); liveImageUrls.add(url); return url; };
+    URL.revokeObjectURL = url => { liveImageUrls.delete(url); revoke(url); };
+  });
+  await page.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await page.evaluate(() => chrome.runtime.sendMessage({ action: "getSchemaState" }));
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN" }));
+  await page.waitForFunction(() => !!globalThis.RecorderMediaStore);
+  await page.evaluate(async () => {
+    const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII="), c => c.charCodeAt(0));
+    await RecorderMediaStore.putBlob("memory-test-shot", new Blob([bytes], { type: "image/png" }));
+  });
+  await writeActions(worker, Array.from({ length: 80 }, (_, index) => ({
+    id: `memory-${index}`, type: "click", timestamp: index + 1, pageName: "page1",
+    target: { tagName: "button", accessibleName: `Step ${index + 1}` },
+    screenshotBeforeKey: "memory-test-shot", screenshotKey: "memory-test-shot"
+  })));
+  await page.waitForFunction(() => document.querySelectorAll(".step-card").length === 80);
+  const first = page.locator(".step-card").first();
+  await first.scrollIntoViewIfNeeded();
+  await first.locator("img.step-screenshot").first().waitFor();
+  for (const index of [20, 40, 60, 79]) {
+    await page.locator(".step-card").nth(index).scrollIntoViewIfNeeded();
+    await page.locator(".step-card").nth(index).locator("img.step-screenshot").first().waitFor();
+  }
+  await page.waitForFunction(() => !document.querySelector(".step-card:first-child img.step-screenshot"));
+  assert.ok(await page.evaluate(() => liveImageUrls.size < 40), "only nearby thumbnails retain object URLs");
+  await first.scrollIntoViewIfNeeded();
+  await first.locator("img.step-screenshot").first().waitFor();
+  await page.waitForFunction(() => !document.querySelector(".step-card:last-child img.step-screenshot"));
+  await first.locator(".step-media").first().click();
+  await page.locator(".image-preview-close").click();
+  assert.ok(await page.evaluate(() => liveImageUrls.size < 40));
+  const consolePage = await context.newPage();
+  await consolePage.addInitScript(() => {
+    globalThis.livePreviewUrls = new Set();
+    const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = blob => { const url = create(blob); livePreviewUrls.add(url); return url; };
+    URL.revokeObjectURL = url => { livePreviewUrls.delete(url); revoke(url); };
+  });
+  await consolePage.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/console.html?previewKey=memory-test-shot`);
+  await consolePage.waitForFunction(() => document.querySelector("#console-preview-image")?.naturalWidth > 0);
+  await consolePage.locator("#console-close-preview").click();
+  assert.equal(await consolePage.evaluate(() => livePreviewUrls.size), 0);
+  assert.equal(await consolePage.locator("#console-preview-image").getAttribute("src"), null);
+});

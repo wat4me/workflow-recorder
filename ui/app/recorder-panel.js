@@ -119,7 +119,7 @@
       // The origin survives edits; root recordings are identified by their first step.
       const origin = stored.workspaceOrigin;
       const nameKey = actions.length === 0 ? "" : origin?.caseId
-        ? JSON.stringify([origin.caseId, origin.loadedAt]) : actions[0].id;
+        ? JSON.stringify([origin.caseId, origin.loadedAt, origin.caseNameSnapshot]) : actions[0].id;
       if (nameKey !== workspaceNameKey) {
         workspaceNameKey = nameKey;
         caseName = actions.length ? origin?.caseNameSnapshot || "" : "";
@@ -367,7 +367,7 @@
         // `activeCaseId` only names the workspace while it still matches that case:
         // recording or editing a step clears it. That is what says whether this
         // download has to bank the recording before handing over the archive.
-        const { activeCaseId } = await chrome.storage.local.get("activeCaseId");
+        const { activeCaseId, workspaceOrigin } = await chrome.storage.local.get(["activeCaseId", "workspaceOrigin"]);
         // The name is asked for once: a workspace that was saved or exported
         // already carries one, and re-asking on every download would be noise.
         const name = caseName || await askCaseName({
@@ -391,7 +391,12 @@
         if (downloadDocCompactBtn) downloadDocCompactBtn.disabled = true;
         try {
           if (!activeCaseId) {
-            const saved = await sendRuntimeMessage({ action: MESSAGE.saveCase, name, snapshot: isRecording });
+            const history = await sendRuntimeMessage({ action: MESSAGE.listCases });
+            if (!history?.success) throw new Error(history?.error || t("listCasesFailed", [], "读取历史用例失败"));
+            const source = (history.cases || []).find(item => item.id === workspaceOrigin?.caseId);
+            const saved = await sendRuntimeMessage({
+              action: MESSAGE.saveCase, name, snapshot: isRecording, folderId: source?.folderId || null
+            });
             if (!saved?.success) {
               // The archive would be the only copy of steps the workbench never
               // sees, so a refused save stops the download rather than hiding it.

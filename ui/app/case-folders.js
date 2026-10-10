@@ -235,6 +235,7 @@ export function attachFolders(ctx) {
     badge.textContent = String(count);
     button.append(label, badge);
     button.addEventListener("click", () => {
+      ctx.selectedIds.clear();
       ctx.activeFolderId = id;
       searchScope.value = "current";
       ctx.render();

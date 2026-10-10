@@ -108,6 +108,7 @@ if (!globalThis.RecorderCaseWorkbench) {
       info.className = "library-item-info";
       const name = document.createElement("strong");
       name.textContent = caseRecord.name;
+      name.title = caseRecord.name;
       const date = new Date(caseRecord.createdAt).toLocaleString(localeTag(), {
         year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
       });
@@ -134,6 +135,23 @@ if (!globalThis.RecorderCaseWorkbench) {
       info.addEventListener("click", () => onOpenCase(caseRecord));
       const actions = document.createElement("div");
       actions.className = "library-item-actions";
+      const rename = actionButton("rename", t("renameCase", [], "重命名用例"), iconSvg("pencil"));
+      rename.setAttribute("aria-label", t("renameCaseNamed", [caseRecord.name], `重命名用例「${caseRecord.name}」`));
+      rename.addEventListener("click", async () => {
+        try {
+          const name = await promptText({
+            title: t("renameCase", [], "重命名用例"), label: t("caseName", [], "用例名称"),
+            value: caseRecord.name, maxLength: 120, confirmText: t("save", [], "保存"),
+            validate: name => !name || name.length > 120
+              ? t("errorInvalidCaseName", [], "请输入 1–120 个字符的用例名称") : ""
+          });
+          if (name === null || name === caseRecord.name) return;
+          const response = await sendRuntimeMessage({ action: MESSAGE.renameCase, caseId: caseRecord.id, name });
+          if (!response?.success) return reportError(response?.error || t("renameCaseFailed", [], "重命名用例失败"));
+          await refresh();
+        } catch (error) { reportError(error.message); }
+      });
+      rename.addEventListener("dragstart", event => event.stopPropagation());
       const move = actionButton(
         "move", t("moveCaseToFolder", [], "移动至"),
         iconSvg("folderCheck")
@@ -177,7 +195,7 @@ if (!globalThis.RecorderCaseWorkbench) {
         if (response.cleanupPending) notify(t("screenshotCleanupDeferred", [], "用例已删除，截图将在后台重试清理"));
       });
       remove.addEventListener("dragstart", event => event.stopPropagation());
-      actions.append(move, remove);
+      actions.append(rename, move, remove);
       item.classList.toggle("is-selected", checkbox.checked);
       const symbol = document.createElement("span");
       symbol.className = "library-item-symbol";
@@ -215,6 +233,7 @@ if (!globalThis.RecorderCaseWorkbench) {
       return true;
     }
     function openFolder(folderId) {
+      ctx.selectedIds.clear();
       ctx.activeFolderId = folderId;
       searchScope.value = "current";
       ctx.expandFolderAncestors(folderId, ctx.collapsedFolders);
@@ -275,6 +294,8 @@ if (!globalThis.RecorderCaseWorkbench) {
           || (ctx.activeFolderId === "unfiled" ? !hasKnownFolder : activeFolderIds.has(item.folderId));
         return inFolder && (!query || item.name.toLocaleLowerCase(localeTag()).includes(query));
       });
+      const visibleIds = new Set(ctx.filteredCases.map(item => item.id));
+      for (const id of ctx.selectedIds) if (!visibleIds.has(id)) ctx.selectedIds.delete(id);
       const subfolders = buildSubfolderItems();
       list.replaceChildren(...subfolders, ...ctx.filteredCases.map(buildItem));
       countBadge.textContent = String(ctx.cases.length);
@@ -386,17 +407,19 @@ if (!globalThis.RecorderCaseWorkbench) {
       render();
     });
     searchInput.addEventListener("input", render);
-    searchScope.addEventListener("change", render);
+    searchScope.addEventListener("change", () => { ctx.selectedIds.clear(); render(); });
     allCasesButton?.addEventListener("click", () => {
+      ctx.selectedIds.clear();
       searchScope.value = "all";
       render();
     });
     createFolderButton.addEventListener("click", async () => { await ctx.createFolder(); });
     moveToFolderButton.addEventListener("click", async () => { await ctx.showMoveDialog([...ctx.selectedIds]); });
     deleteCasesButton.addEventListener("click", async () => {
-      const count = ctx.selectedIds.size;
+      const caseIds = [...ctx.selectedIds];
+      const count = caseIds.length;
       if (count === 0) return;
-      const preview = await deletionPreview([...ctx.selectedIds]);
+      const preview = await deletionPreview(caseIds);
       const message = preview
         ? t(
           "batchDeleteCasesMessageWithCounts",
@@ -413,7 +436,7 @@ if (!globalThis.RecorderCaseWorkbench) {
       });
       if (!confirmed) return;
       deleteCasesButton.disabled = true;
-      const response = await sendRuntimeMessage({ action: MESSAGE.deleteCases, caseIds: [...ctx.selectedIds] });
+      const response = await sendRuntimeMessage({ action: MESSAGE.deleteCases, caseIds });
       if (!response?.success) {
         reportError(response?.error || t("deleteCasesFailed", [], "批量删除用例失败"));
         updateSelection();

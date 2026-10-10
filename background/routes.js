@@ -39,6 +39,7 @@ export function createApplicationRoutes({
     [MESSAGE.clearSteps]: () => cases.clearWorkspace(),
     [MESSAGE.saveCase]: request => cases.save(request.name, !!request.snapshot, request.folderId),
     [MESSAGE.loadCase]: request => cases.load(request.caseId),
+    [MESSAGE.renameCase]: request => cases.rename(request.caseId, request.name),
     [MESSAGE.deleteCase]: request => cases.remove(request.caseId),
     [MESSAGE.deleteCases]: request => cases.removeMany(request.caseIds),
     [MESSAGE.previewCaseDeletion]: request => cases.previewRemoval(request.caseIds),

@@ -24,6 +24,7 @@
     clearSteps: "clearSteps",
     saveCase: "saveCase",
     loadCase: "loadCase",
+    renameCase: "renameCase",
     deleteCase: "deleteCase",
     deleteCases: "deleteCases",
     // Read-only: what a deletion would free, so the confirmation can say so before

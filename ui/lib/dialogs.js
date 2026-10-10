@@ -106,6 +106,29 @@
     });
   }
 
+  function limitNameInput(input, maxLength = 120) {
+    input.maxLength = maxLength;
+    input.value = input.value.slice(0, maxLength);
+    const counter = document.createElement("small");
+    counter.className = "name-length-counter";
+    const update = () => {
+      counter.textContent = t("nameLengthHint", [input.value.length, maxLength], `${input.value.length} / ${maxLength}`);
+    };
+    input.after(counter);
+    input.addEventListener("input", update);
+    input.addEventListener("paste", event => {
+      if (!event.clipboardData) return;
+      event.preventDefault();
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? start;
+      const available = Math.max(0, maxLength - (input.value.length - (end - start)));
+      const text = event.clipboardData.getData("text/plain").slice(0, available).replace(/[\r\n]/g, " ");
+      input.setRangeText(text, start, end, "end");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    update();
+  }
+
   /** Resolves with text (and an optional selection), or null if cancelled. */
   function promptText({
     title = t("confirmAction", [], "确认操作"),
@@ -114,7 +137,8 @@
     confirmText = t("confirm", [], "确认"),
     value = "",
     maxLength = 120,
-    selection = null
+    selection = null,
+    validate = null
   } = {}) {
     return new Promise(resolve => {
       const overlay = document.createElement("div");
@@ -146,6 +170,18 @@
       const input = overlay.querySelector("input");
       input.maxLength = maxLength;
       input.value = value;
+      limitNameInput(input, maxLength);
+      const error = document.createElement("p");
+      error.id = "prompt-validation-error";
+      error.className = "prompt-validation-error";
+      error.setAttribute("role", "alert");
+      error.hidden = true;
+      input.setAttribute("aria-describedby", error.id);
+      input.closest("label").after(error);
+      input.addEventListener("input", () => {
+        error.hidden = true;
+        input.removeAttribute("aria-invalid");
+      });
 
       let picker = null;
       if (selection) {
@@ -163,9 +199,18 @@
         overlay.remove();
         resolve(result);
       };
-      const submit = () => finish(picker
-        ? { text: input.value.trim(), selection: picker.value }
-        : input.value.trim());
+      const submit = () => {
+        const text = input.value.trim();
+        const message = validate?.(text);
+        if (message) {
+          error.textContent = message;
+          error.hidden = false;
+          input.setAttribute("aria-invalid", "true");
+          input.focus();
+          return;
+        }
+        finish(picker ? { text, selection: picker.value } : text);
+      };
       const onKeyDown = event => {
         if (event.key === "Escape") finish(null);
         if (event.key === "Enter") {
@@ -219,6 +264,7 @@
 
       const input = overlay.querySelector("input");
       input.value = defaultName;
+      limitNameInput(input);
       const finish = result => {
         document.removeEventListener("keydown", onKeyDown);
         overlay.remove();

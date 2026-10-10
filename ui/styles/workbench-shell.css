@@ -51,23 +51,6 @@ body {
   min-height: 62px;
 }
 
-.toolbar .open-source-link {
-  padding: 8px 12px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.open-source-link:hover {
-  background: var(--accent-light);
-  border-color: var(--accent-color);
-  color: var(--accent-color);
-}
-
-.open-source-link:focus-visible {
-  outline: 2px solid var(--accent-color);
-  outline-offset: 2px;
-}
-
 @media (max-width: 600px) {
   .workbench-header {
     flex-wrap: wrap;

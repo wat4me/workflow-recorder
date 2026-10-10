@@ -80,3 +80,15 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-co
   *, *::before, *::after { animation: none !important; transition: none !important; }
   button:enabled:active { transform: none; }
 }
+
+/* Keep the recorder compact without shrinking text or screenshot thumbnails. */
+.app-container .recorder-header { padding-block: 6px; gap: 6px; }
+.app-container .header-record-actions .btn { min-height: 32px; padding-block: 5px; }
+.app-container .app-main { padding-top: 6px; gap: 5px; }
+.app-container .case-actionbar { padding: 6px 8px; }
+.app-container .case-action-buttons .btn { min-height: 32px; padding-block: 5px; }
+.app-container .steps-container { gap: 4px; }
+.app-container .step-card { padding-block: 6px; }
+.confirm-content .prompt-validation-error { color: var(--danger-color); margin: 4px 0 0; }
+
+.name-length-counter { display: block; margin-top: 3px; color: var(--text-muted); font-size: 11px; text-align: right; }

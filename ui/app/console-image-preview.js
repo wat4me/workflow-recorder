@@ -124,8 +124,17 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
     return true;
   }
 
+  function releasePreviewImage() {
+    ++previewLoadId;
+    previewImage.onload = null;
+    previewImage.removeAttribute("src");
+    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl = null;
+  }
+
   function closeConsoleImagePreview() {
     imagePreview.hidden = true;
+    releasePreviewImage();
     previewDrag = null;
     previewStage.classList.remove("is-dragging");
     const url = new URL(window.location.href);
@@ -189,7 +198,7 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
     loadPreviewSequence,
     showConsoleImagePreview,
     dispose() {
-      if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+      releasePreviewImage();
     }
   };
 }

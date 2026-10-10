@@ -50,6 +50,9 @@
 
 录制开始时 Chrome 可能显示“正在调试此浏览器”的提示，这是扩展使用 Chrome DevTools Protocol 接收页面截图帧的正常行为。停止录制后，扩展会立即断开调试会话。
 
+本项目已开源，采用 MIT 协议。你可以在 GitHub 查看源码、反馈问题或参与贡献：
+https://github.com/wat4me/workflow-recorder
+
 ### Detailed description (English)
 
 Workflow Recorder is a browser interaction recorder for documenting web procedures, helping users understand workflows and reproduce them with AI or automation tools. It turns recorded web interactions into clear Markdown instructions that can be reviewed, reused, or provided to an AI tool with browser automation capabilities.
@@ -65,6 +68,9 @@ Key features:
 - Save workflow cases and export one or multiple cases as ZIP archives containing Markdown documents and JPG screenshots.
 - Copy Markdown task instructions from the side panel or full-page case view and paste them into an AI tool with browser automation capabilities.
 - Chinese and English user interfaces.
+
+This project is open source under the MIT License. View the source code, report issues, or contribute on GitHub:
+https://github.com/wat4me/workflow-recorder
 
 Privacy: the extension processes URLs, page titles, element information, user interactions, form input values, and screenshots from pages the user explicitly records. This information is used only to generate, store, preview, and export workflow documentation on the user's device. It is stored in extension-specific storage in the current Chrome profile and is not sent to the developer or any third-party server, sold, used for advertising, or used for profiling. Users should not record sensitive content they do not want stored locally or included in exports.
 

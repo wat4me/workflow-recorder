@@ -19,43 +19,60 @@ export function attachStepMedia(ctx) {
     const distanceFromBottom = stepsContainer.scrollHeight - stepsContainer.scrollTop - stepsContainer.clientHeight;
     if (distanceFromBottom <= 120) ctx.scrollToLatest();
   }
-  async function loadScreenshot(media, key) {
-    const blob = await getBlob(key);
-    if (!media.isConnected) return;
-    if (!blob) {
-      media.className = "step-media is-missing";
-      media.textContent = t("stepScreenshotUnavailable", [], "无截图");
-      return;
+  const loading = new WeakMap();
+  function unloadScreenshot(media) {
+    const url = mediaUrls.get(media);
+    if (!url && !loading.has(media)) return;
+    loading.delete(media);
+    if (url) {
+      media.style.minHeight = `${media.getBoundingClientRect().height}px`;
+      URL.revokeObjectURL(url);
+      objectUrls.delete(url);
+      mediaUrls.delete(media);
     }
-    const url = URL.createObjectURL(blob);
-    objectUrls.add(url);
-    mediaUrls.set(media, url);
-    const image = document.createElement("img");
-    image.className = "step-screenshot";
-    image.src = url;
-    image.alt = media.dataset.screenshotAlt;
-    media.className = "step-media";
-    media.disabled = false;
-    media.title = t("clickToZoom", [], "点击放大截图");
-    media.addEventListener("click", () => {
-      const mediaItems = [...stepsContainer.querySelectorAll("[data-screenshot-key]")];
-      openImagePreview(blob, media.dataset.screenshotAlt, {
-        sequence: mediaItems.map(item => ({ key: item.dataset.screenshotKey, alt: item.dataset.screenshotAlt })),
-        index: mediaItems.indexOf(media),
-        showFit: readOnly
-      });
-    });
-    media.replaceChildren(image);
+    media.disabled = true;
+    media.className = "step-media is-loading";
+    media.textContent = t("loadingStepScreenshot", [], "正在读取步骤截图…");
+  }
+  async function loadScreenshot(media, key) {
+    if (loading.has(media) || mediaUrls.has(media)) return;
+    const token = {};
+    loading.set(media, token);
+    try {
+      const blob = await getBlob(key);
+      if (loading.get(media) !== token || !media.isConnected) return;
+      loading.delete(media);
+      if (!blob) {
+        media.className = "step-media is-missing";
+        media.textContent = t("stepScreenshotUnavailable", [], "无截图");
+        observer?.unobserve(media);
+        pendingLoads.delete(media);
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      objectUrls.add(url);
+      mediaUrls.set(media, url);
+      const image = document.createElement("img");
+      image.className = "step-screenshot";
+      image.src = url;
+      image.alt = media.dataset.screenshotAlt;
+      media.className = "step-media";
+      media.disabled = false;
+      media.title = t("clickToZoom", [], "点击放大截图");
+      media.replaceChildren(image);
+    } finally {
+      if (loading.get(media) === token) loading.delete(media);
+    }
   }
   function screenshotObserver() {
     if (observer) return observer;
     observer = new IntersectionObserver(entries => {
       for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        observer.unobserve(entry.target);
-        const load = pendingLoads.get(entry.target);
-        pendingLoads.delete(entry.target);
-        if (load) load();
+        if (!entry.isIntersecting) {
+          unloadScreenshot(entry.target);
+          continue;
+        }
+        pendingLoads.get(entry.target)?.();
       }
     }, { root: stepsContainer, rootMargin: "300px" });
     ctx.observer = observer;
@@ -69,6 +86,17 @@ export function attachStepMedia(ctx) {
     media.dataset.screenshotKey = key;
     media.dataset.screenshotAlt = alt;
     media.textContent = t("loadingStepScreenshot", [], "正在读取步骤截图…");
+    media.addEventListener("click", async () => {
+      try {
+        const blob = await getBlob(key);
+        if (!blob || !media.isConnected) return;
+        const mediaItems = [...stepsContainer.querySelectorAll("[data-screenshot-key]")];
+        openImagePreview(blob, media.dataset.screenshotAlt, {
+          sequence: mediaItems.map(item => ({ key: item.dataset.screenshotKey, alt: item.dataset.screenshotAlt })),
+          index: mediaItems.indexOf(media), showFit: readOnly
+        });
+      } catch (error) { console.error("[StepView] Failed to open screenshot:", error); }
+    });
     pendingLoads.set(media, () => {
       loadScreenshot(media, key).then(scrollToLatestIfAppended, error => {
         console.error("[StepView] Failed to show step screenshot:", error);
@@ -87,12 +115,7 @@ export function attachStepMedia(ctx) {
     if (!media) return;
     observer?.unobserve(media);
     pendingLoads.delete(media);
-    const url = mediaUrls.get(media);
-    if (url) {
-      URL.revokeObjectURL(url);
-      objectUrls.delete(url);
-      mediaUrls.delete(media);
-    }
+    unloadScreenshot(media);
     media.remove();
   }
   function isFailure(captureState) {
