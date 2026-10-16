@@ -30,11 +30,85 @@ function fakeTarget(overrides = {}) {
   };
 }
 
+test("browser AX evidence is included in AI copy and documents separately from DOM hints", () => {
+  const generator = loadGenerator();
+  const action = { type: "click", timestamp: 1, target: fakeTarget(), accessibility: {
+    source: "chrome-accessibility", status: "captured", role: "button", name: "Browser name", properties: { disabled: false }
+  } };
+  for (const output of [generator.generate([action]), generator.generateTask("Case", [action])]) {
+    assert.match(output, /发送/);
+    assert.match(output, /dom context:/);
+    assert.match(output, /AX context \(browser-computed\).*Browser name/);
+    assert.match(output, /"disabled":false/);
+  }
+  action.accessibility = { status: "unavailable", reason: "timeout" };
+  assert.match(generator.generate([action]), /unavailable \(timeout\); use DOM context/);
+  action.accessibility = { status: "ignored", role: "none", name: "", relatedAncestor: {
+    distance: 1, role: "button", name: "More", properties: {}
+  } };
+  const ignored = generator.generate([action]);
+  assert.match(ignored, /target is ignored.*use DOM context/);
+  assert.match(ignored, /not the clicked node.*More/);
+  assert.doesNotMatch(ignored, /"role":"none"/);
+});
+
 test("returns a friendly empty-state document", () => {
   const generator = loadGenerator();
 
   assert.equal(generator.generate([]), "No steps recorded yet.");
   assert.equal(generator.generate(null), "No steps recorded yet.");
+});
+
+test("AI documents distinguish the original SVG hit from the interaction target", () => {
+  const generator = loadGenerator();
+  const doc = generator.generateTask("Branch selection", [{ type: "click", target: fakeTarget(),
+    hitTarget: { tagName: "svg", className: "branch-icon", ancestorDistance: 1 }
+  }]);
+  assert.match(doc, /click <button/);
+  assert.match(doc, /recorded hit: <svg class="branch-icon">; interaction target is 1 level\(s\) above/);
+  assert.doesNotMatch(generator.renderTag({ tagName: "svg", className: {} }), /object Object/);
+  assert.match(generator.renderTag({ tagName: "svg", className: { baseVal: "legacy-icon" } }), /legacy-icon/);
+});
+
+test("AX timeout diagnostics remain visible beside the DOM fallback", () => {
+  const doc = loadGenerator().generate([{ type: "click", target: fakeTarget(), accessibility: {
+    status: "unavailable", reason: "timeout", diagnostics: {
+      stage: "Runtime.evaluate", contextsTried: 12, elapsedMs: 501
+    }
+  } }]);
+  assert.match(doc, /unavailable \(timeout\); use DOM context/);
+  assert.match(doc, /AX timeout detail: .*"stage":"Runtime.evaluate","contextsTried":12,"elapsedMs":501/);
+});
+
+test("stable DOM attributes survive long HTML and target snapshots stay syntactically complete", () => {
+  const doc = loadGenerator().generate([{ type: "click", target: fakeTarget({
+    outerHTML: '<button title="' + "x".repeat(400) + '" data-testid="confirm-request">Confirm</button>',
+    dataAttributes: { "data-testid": "confirm-request", "data-ref": "branch-a" },
+    ariaAttributes: { "aria-controls": "branch-menu", "aria-label": "Confirm request" }
+  }) }]);
+  assert.match(doc, /DOM attribute hints: .*"data-testid":"confirm-request"/);
+  assert.match(doc, /"aria-controls":"branch-menu"/);
+  assert.match(doc, /<button[^\n]*>  <!-- target -->/);
+  assert.match(doc, /HTML snapshot truncated/);
+  assert.doesNotMatch(doc, /x{100}/);
+});
+
+test("closing an iframe does not claim the top-level page or workflow closed", () => {
+  const doc = loadGenerator().generate([{ type: "click", target: fakeTarget({
+    tagName: "span", role: null, className: "my-icon-close close", accessibleName: null,
+    frameInfo: { isIframe: true, frameName: "layui-layer-iframe4" }
+  }), frameClosedAfterClick: true }]);
+  assert.match(doc, /in iframe\[name=layui-layer-iframe4\]/);
+  assert.match(doc, /source iframe closed after this step/);
+  assert.doesNotMatch(doc, /^   page closed after this step$/m);
+});
+
+test("test hooks take priority over incidental data attributes in the AI document", () => {
+  const dataAttributes = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`data-noise-${i}`, "noise"]));
+  dataAttributes["data-testid"] = "save-request";
+  const doc = loadGenerator().generate([{ type: "click", target: fakeTarget({ dataAttributes }) }]);
+  assert.match(doc, /"data-testid":"save-request"/);
+  assert.ok(doc.length < 2500, "attribute context stays bounded");
 });
 
 test("generates English step lines for all core actions", () => {

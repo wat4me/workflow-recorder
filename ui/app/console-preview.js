@@ -96,7 +96,7 @@ export function createConsolePreview({ t, sendRuntimeMessage, MESSAGE, notify, r
     if (!(await resolveUnsavedWorkspace())) return;
     const prepared = await sendRuntimeMessage({ action: MESSAGE.prepareSidePanelForTab, tabId });
     if (!prepared?.success) throw new Error(prepared?.error || t("targetPageUnavailable", [], "目标页面不可录制"));
-    const loaded = await sendRuntimeMessage({ action: MESSAGE.loadCase, caseId: previewCaseId });
+    const loaded = await sendRuntimeMessage({ action: MESSAGE.loadCase, caseId: previewCaseId, tabId });
     if (!loaded?.success) throw new Error(loaded?.error || t("loadCaseFailed", [], "加载用例失败"));
     closeTargetTabDialog();
     notify(t("continueRecordingReady", [], "已加载用例，请在目标页面侧边栏中继续录制"));

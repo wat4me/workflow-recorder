@@ -10,6 +10,21 @@ function startFixtureServer() {
   const server = http.createServer((req, res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
 
+    if (req.url === "/self-closing-frame") {
+      res.end(`<!doctype html><html><body>
+        <style>.my-icon-close {display:inline-block;width:24px;height:24px;cursor:auto}.my-icon-close::before{content:'×'}</style>
+        <span id="custom-frame-close" data-v-a506f636="" class="my-icon-close close"></span>
+        <button id="native-frame-close">Close frame</button>
+        <span id="frame-inert" class="my-icon-close close"></span>
+        <script>
+          for (const id of ["custom-frame-close", "native-frame-close"]) {
+            document.getElementById(id).addEventListener("click", () => window.frameElement.closest(".layui-layer").remove());
+          }
+        </script>
+      </body></html>`);
+      return;
+    }
+
     if (req.url === "/child") {
       res.end(`<!doctype html>
         <html><head><title>Child page</title></head>
@@ -250,6 +265,185 @@ const LOADED_MACHINE_TIMEOUT_MS = 30000;
  * frames are enough to stall the stability check past its default timeout.
  */
 const CLICK_IN_CHILD = { force: true, timeout: LOADED_MACHINE_TIMEOUT_MS };
+
+test("A B C tabs keep independent drafts while recorded child tabs share their parent's steps", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN",
+    recordingConsentVersion: 3, captureSettings: { screenshots: true } }));
+  const pages = [];
+  for (const name of ["A", "B", "C"]) {
+    const page = await context.newPage();
+    await page.goto(`${fixture.origin}/base?draft=${name}`);
+    await page.evaluate(name => { document.title = `Draft ${name}`; }, name);
+    pages.push(page);
+  }
+  const [a, b, c] = pages;
+  const ids = await worker.evaluate(async urls => {
+    const tabs = await chrome.tabs.query({});
+    return urls.map(url => tabs.find(tab => tab.url === url).id);
+  }, pages.map(page => page.url()));
+  const panel = await context.newPage();
+  const extensionId = worker.url().split("/")[2];
+  const show = async tabId => {
+    await worker.evaluate(tabId => chrome.tabs.update(tabId, { active: true }), tabId);
+    await panel.goto(`chrome-extension://${extensionId}/ui/popup.html?show=${Date.now()}`);
+    await panel.locator(".draft-toolbar").waitFor({ state: "visible" });
+    await panel.waitForFunction(() => document.getElementById("recording-draft-select").value !== "");
+    return panel.locator("#recording-draft-select").inputValue();
+  };
+  const pressRecord = () => panel.evaluate(() => document.getElementById("record-btn").click());
+  const draftA = await show(ids[0]);
+  await pressRecord();
+  await waitForActions(worker, list => list.some(action => action.type === "navigate" && action.screenshotKey));
+  await a.locator("#scripted-click-target").click();
+  await waitForActions(worker, list => list.some(action => action.target?.id === "scripted-click-target"));
+  const childPromise = context.waitForEvent("page");
+  await a.locator("#open-child").click();
+  const child = await childPromise;
+  await child.waitForLoadState();
+  await waitForRecorder(worker, child.url());
+  const childId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url).id, child.url());
+  assert.equal(await show(childId), draftA);
+  assert.equal((await worker.evaluate(() => chrome.storage.local.get("isRecording"))).isRecording, true, "opening the child panel keeps the shared recording running");
+  await child.locator("#child-action").click(CLICK_IN_CHILD);
+  await waitForActions(worker, list => list.some(action => action.target?.id === "child-action" && action.screenshotKey));
+  await a.locator("#query").fill("pending A input");
+  await a.frameLocator("#cke-editor-frame").locator("body").fill("pending iframe A input");
+  const draftB = await show(ids[1]);
+  assert.notEqual(draftB, draftA);
+  assert.equal(await panel.locator(".step-card").count(), 0, JSON.stringify({ actions: await readActions(worker),
+    draftB, state: await worker.evaluate(() => chrome.storage.local.get(["isRecording", "recordingDraftIndex", "activeRecordingDraftId"])) }));
+  assert.match(await panel.locator("#record-btn-label").innerText(), /开始录制/);
+  const aState = await panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), ids[0]);
+  assert.ok(aState.actions.some(action => action.value === "pending A input"), "switch pauses and flushes pending input before stashing A");
+  assert.ok(aState.actions.some(action => action.value === "pending iframe A input"), "every iframe must acknowledge its committed input before the draft switches");
+  assert.ok(aState.actions.some(action => action.pageName === "page2" && action.target?.id === "child-action"));
+  assert.equal(aState.state.isRecording, false);
+  const frameKeysA = aState.actions.flatMap(action => [action.screenshotKey, action.screenshotBeforeKey]).filter(Boolean);
+  assert.ok(frameKeysA.length > 0);
+  await pressRecord();
+  await waitForActions(worker, list => list.some(action => action.type === "navigate" && action.screenshotKey));
+  await b.locator("#scripted-click-target").click();
+  await waitForActions(worker, list => list.some(action => action.target?.id === "scripted-click-target" && action.screenshotKey));
+  const draftC = await show(ids[2]);
+  assert.notEqual(draftC, draftB);
+  assert.equal(await panel.locator(".step-card").count(), 0);
+  assert.equal(await panel.locator("#recording-draft-select option").count(), 3);
+  const bState = await panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), ids[1]);
+  assert.equal(bState.actions.length, 2);
+  const stale = await panel.evaluate(draftId => chrome.runtime.sendMessage({ action: "clearSteps", workspaceDraftId: draftId }), draftA);
+  assert.equal(stale.success, false, "an old A confirmation cannot clear C");
+  await panel.evaluate(() => chrome.runtime.sendMessage({ action: "cleanupScreenshots", force: true }));
+  assert.ok(await worker.evaluate(async keys => (await Promise.all(keys.map(key => RecorderMediaStore.getBlob(key)))).every(Boolean), frameKeysA));
+  // Chrome retains a side-panel document when switching tabs. Exercise that
+  // visibility handshake too, rather than only testing freshly opened panels.
+  // This tab-hosted test page models the panel's visible state explicitly.
+  await panel.evaluate(() => {
+    window.retainedDraftPanel = true;
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+  });
+  await worker.evaluate(tabId => chrome.tabs.update(tabId, { active: true }), ids[0]);
+  await panel.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await panel.waitForFunction(draftId => document.getElementById("recording-draft-select").value === draftId, draftA);
+  assert.equal(await panel.evaluate(() => window.retainedDraftPanel), true, "switching back reuses the panel document");
+  await panel.waitForFunction(count => document.querySelectorAll(".step-card").length === count, aState.actions.length);
+  assert.match(await panel.locator("#record-btn-label").innerText(), /继续录制/);
+  assert.deepEqual((await readActions(worker)).map(action => action.id), aState.actions.map(action => action.id));
+  await pressRecord();
+  await waitForCondition(async () => (await worker.evaluate(() => chrome.storage.local.get("isRecording"))).isRecording, "A resumed");
+  await a.locator("#scripted-click-target").click();
+  await waitForActions(worker, list => list.length > aState.actions.length);
+  await pressRecord();
+  await waitForCondition(async () => !(await worker.evaluate(() => chrome.storage.local.get("isRecording"))).isRecording, "A paused");
+  await panel.locator("#clear-steps-btn").click();
+  await panel.locator(".confirm-submit").click();
+  await panel.waitForFunction(() => document.querySelectorAll(".step-card").length === 0);
+  assert.equal(await show(ids[1]), draftB);
+  assert.deepEqual((await readActions(worker)).map(action => action.id), bState.actions.map(action => action.id));
+  assert.match(await panel.locator("#record-btn-label").innerText(), /继续录制/);
+  assert.equal((await readCases(worker)).length, 0, "switching drafts does not create unwanted saved cases");
+  const errors = [];
+  panel.on("pageerror", error => errors.push(error.message));
+  await panel.setViewportSize({ width: 360, height: 800 });
+  const bounds = await panel.locator(".draft-toolbar").boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 360);
+  if (process.env.DRAFT_PREVIEW_DIR) {
+    const output = path.resolve(process.env.DRAFT_PREVIEW_DIR);
+    fs.mkdirSync(output, { recursive: true });
+    await panel.screenshot({ path: path.join(output, "independent-drafts.png") });
+  }
+  assert.deepEqual(errors, []);
+  await b.close();
+  await show(ids[2]);
+  await panel.locator("#recording-draft-select").selectOption(draftB);
+  await panel.waitForFunction(count => document.querySelectorAll(".step-card").length === count, bState.actions.length);
+  assert.deepEqual((await readActions(worker)).map(action => action.id), bState.actions.map(action => action.id), "a closed tab's draft can be recovered through the selector");
+});
+
+test("opening the panel fits only the top frame without starting recording or repeated zoom", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, captureSettings: { screenshots: false } }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base`);
+  await page.evaluate(() => {
+    globalThis.zoomWrites = 0;
+    // DOM mutations cross isolated worlds; patched JS methods do not.
+    new MutationObserver(records => { globalThis.zoomWrites += records.length; })
+      .observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+  });
+  const tab = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url), page.url());
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  const layout = open => panel.evaluate(({ tabId, windowId, open }) => chrome.runtime.sendMessage({
+    action: "setSidePanelLayout", tabId, windowId, open
+  }), { tabId: tab.id, windowId: tab.windowId, open });
+  assert.equal((await layout(true)).success, true);
+  await page.waitForFunction(() => !!document.documentElement.style.zoom);
+  const instrumentation = () => worker.evaluate(async tabId => (await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: () => ({ recorder: !!window.hasPlaywrightRecorderInjected,
+      analyzer: !!window.SemanticElementAnalyzer, layout: !!globalThis.RecorderPageFit })
+  })).map(result => ({ frameId: result.frameId, ...result.result })), tab.id);
+  const frames = await instrumentation();
+  assert.ok(frames.length >= 3);
+  assert.ok(frames.every(frame => !frame.recorder && !frame.analyzer), "opening alone does not install recording scripts");
+  assert.ok(frames.find(frame => frame.frameId === 0).layout);
+  assert.ok(frames.filter(frame => frame.frameId !== 0).every(frame => !frame.layout), "layout is top-frame only");
+  // A resize caused by the zoom itself, or by taller content, must not re-fit.
+  await page.evaluate(() => document.body.append(document.createElement("p")));
+  assert.equal((await layout(true)).success, true);
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 300)));
+  assert.equal(await page.evaluate(() => globalThis.zoomWrites), 1);
+  const toggle = start => panel.evaluate(({ tabId, start }) => chrome.runtime.sendMessage({
+    action: "toggleRecording", start, rootTabId: tabId
+  }), { tabId: tab.id, start });
+  assert.equal((await toggle(true)).success, true);
+  assert.ok((await instrumentation()).every(frame => frame.recorder && frame.analyzer));
+  await page.locator("#scripted-click-target").click();
+  await waitForActions(worker, list => list.some(action => action.target?.id === "scripted-click-target"));
+  assert.equal((await toggle(false)).success, true);
+  assert.ok(await page.evaluate(() => !!document.documentElement.style.zoom), "recording stop preserves panel layout");
+  assert.equal((await layout(false)).success, true);
+  await page.waitForFunction(() => document.documentElement.style.zoom === "");
+  assert.equal((await layout(true)).success, true);
+  await page.waitForFunction(() => !!document.documentElement.style.zoom);
+});
 
 test("folder trees collapse independently without changing selections or move targets", async (t) => {
   const extensionPath = path.resolve(__dirname, "..");
@@ -585,10 +779,21 @@ test("side-panel saving selects nested folders and rejects a folder deleted whil
   await workbench.locator(".library-item").waitFor();
   assert.ok((await workbench.locator(".library-item").innerText()).includes("分类用例"));
 
+  await save.click();
+  await page.locator(".confirm-submit").click();
+  assert.equal(await page.locator(".prompt-text-dialog").isVisible(), true);
+  assert.match(await page.locator("#prompt-validation-error").innerText(), /同名用例/);
+  assert.equal((await send({ action: "listCases" })).cases.length, 1);
+  await select.locator(`[data-folder-id="${leaf.folder.id}"]`).click();
+  assert.equal(await page.locator("#prompt-validation-error").isHidden(), true);
+  await page.locator(".confirm-cancel").click();
+
   await page.evaluate(() => RecorderI18n.setLanguage("en"));
   await save.click();
   assert.equal(await select.locator('[aria-checked="true"]').getAttribute("data-folder-id"), child.folder.id);
   assert.equal(await select.locator(".folder-picker-name").first().innerText(), "Unfiled");
+  await page.locator(".confirm-submit").click();
+  assert.match(await page.locator("#prompt-validation-error").innerText(), /already exists/i);
   await page.locator(".confirm-cancel").click();
   assert.equal((await send({ action: "listCases" })).cases.length, 1);
 
@@ -1366,6 +1571,189 @@ test("recording controls use the light theme and expose screenshot labels respon
   }
 });
 
+test("copy-to-AI reads committed steps, reports read failures and stays busy across UI refreshes", async (t) => {
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN" }));
+  const oldStep = { id: "copy-old", timestamp: 1, type: "click", pageName: "page1",
+    target: { tagName: "button", accessibleName: "Original action" } };
+  const newStep = { ...oldStep, id: "copy-new", target: { tagName: "button", accessibleName: "Latest committed action" } };
+  await writeActions(worker, [oldStep]);
+  const panel = await context.newPage();
+  await panel.addInitScript(() => {
+    window.clipboardWrites = [];
+    Object.defineProperty(navigator, "clipboard", { value: {
+      writeText: async text => {
+        clipboardWrites.push(text);
+        if (window.blockClipboard) await new Promise(resolve => { window.finishClipboard = resolve; });
+      }
+    } });
+    // Delay only step notifications to reproduce a real lagging render cache.
+    const addListener = chrome.storage.onChanged.addListener.bind(chrome.storage.onChanged);
+    chrome.storage.onChanged.addListener = listener => addListener((changes, area) => {
+      if (window.holdStepUpdates && (changes.actionOrder || Object.keys(changes).some(key => key.startsWith("action:")))) return;
+      listener(changes, area);
+    });
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
+    chrome.runtime.sendMessage = (message, ...args) => {
+      if (message.action === "getActions" && window.failCopyReads) {
+        args.at(-1)({ success: false, error: "Injected read failure" });
+        return;
+      }
+      return send(message, ...args);
+    };
+  });
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await panel.waitForFunction(() => document.querySelectorAll(".step-card").length === 1);
+  await panel.evaluate(() => { window.holdStepUpdates = true; });
+  await writeActions(worker, [oldStep, newStep]);
+  assert.equal(await panel.locator(".step-card").count(), 1);
+  await panel.locator("#copy-task-btn").click();
+  await panel.waitForFunction(() => clipboardWrites.length === 1);
+  const copied = await panel.evaluate(() => clipboardWrites[0]);
+  assert.match(copied, /Steps: 2/);
+  assert.match(copied, /Latest committed action/);
+
+  await panel.evaluate(() => { window.blockClipboard = true; });
+  await panel.locator("#copy-task-btn").click();
+  await panel.waitForFunction(() => window.finishClipboard);
+  await panel.evaluate(() => { window.holdStepUpdates = false; });
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: true }));
+  await panel.waitForFunction(() => document.querySelector("#record-btn").classList.contains("recording-state"));
+  assert.equal(await panel.locator("#copy-task-btn").isDisabled(), true);
+  await panel.locator("#copy-task-btn").dispatchEvent("click");
+  assert.equal(await panel.evaluate(() => clipboardWrites.length), 2, "refresh cannot allow duplicate clipboard writes");
+  await panel.evaluate(() => { window.blockClipboard = false; finishClipboard(); });
+  await panel.waitForFunction(() => !document.querySelector("#copy-task-btn").disabled);
+
+  await panel.evaluate(() => { window.failCopyReads = true; });
+  await panel.locator("#copy-task-btn").click();
+  await panel.locator(".recorder-toast.danger").filter({ hasText: "Injected read failure" }).waitFor();
+  assert.equal(await panel.evaluate(() => clipboardWrites.length), 2, "read failure must not copy cached steps");
+  await panel.evaluate(() => { window.failCopyReads = false; window.holdStepUpdates = true; });
+  await writeActions(worker, []);
+  await panel.locator("#copy-task-btn").click();
+  await panel.locator(".recorder-toast.danger").filter({ hasText: "暂无录制步骤" }).waitFor();
+  assert.equal(await panel.evaluate(() => clipboardWrites.length), 2, "an emptied workspace must not copy cached steps");
+});
+
+test("side-panel screenshot defaults collapse long recordings while keeping images and export intact", async (t) => {
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN" }));
+  const panel = await context.newPage();
+  const errors = [];
+  panel.on("pageerror", error => errors.push(error.message));
+  await panel.setViewportSize({ width: 360, height: 720 });
+  const panelUrl = `chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`;
+  await panel.goto(panelUrl);
+  await panel.evaluate(() => chrome.runtime.sendMessage({ action: "getSchemaState" }));
+  await panel.locator("#capture-settings-btn").click();
+  const expandedDefault = panel.locator("#sidebar-screenshots-expanded");
+  assert.equal(await expandedDefault.isChecked(), true, "existing users keep the expanded default");
+  assert.equal(await panel.locator("#capture-screenshots-enabled").isChecked(), true);
+  await expandedDefault.uncheck();
+  await panel.locator(".capture-settings-dialog .confirm-submit").click();
+  await panel.locator(".capture-settings-dialog").waitFor({ state: "detached" });
+  const preferences = await worker.evaluate(() => chrome.storage.local.get(["captureSettings", "stepDisplaySettings"]));
+  assert.deepEqual(preferences.captureSettings, { screenshots: true });
+  assert.deepEqual(preferences.stepDisplaySettings, { screenshotsExpanded: false });
+  await panel.evaluate(() => {
+    window.thumbnailRequests = 0;
+    const getThumbnail = RecorderScreenshotMedia.getThumbnail;
+    RecorderScreenshotMedia.getThumbnail = (...args) => { thumbnailRequests++; return getThumbnail(...args); };
+  });
+
+  const actions = Array.from({ length: 50 }, (_, index) => ({
+    id: `fold-${index}`, timestamp: index + 1, type: "click", pageName: `page${index % 4 + 1}`,
+    target: { tagName: "button", accessibleName: `Recorded action ${index + 1}` },
+    screenshotBeforeKey: "fold-before", screenshotKey: "fold-after", screenshotStatus: "captured"
+  }));
+  await worker.evaluate(list => RecorderMediaStore.withWriteLock(async () => {
+    const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII="), c => c.charCodeAt(0));
+    for (const key of ["fold-before", "fold-after"]) await RecorderMediaStore.putBlob(key, new Blob([bytes], { type: "image/png" }));
+    const writes = { actionOrder: list.map(action => action.id) };
+    for (const action of list) writes[`action:${action.id}`] = action;
+    await chrome.storage.local.set(writes);
+  }), actions);
+  await panel.waitForFunction(() => document.querySelectorAll(".step-card").length === 50);
+  assert.equal(await panel.locator(".step-media-row:visible").count(), 0);
+  assert.equal(await panel.locator("img.step-screenshot").count(), 0, "collapsed cards do not load thumbnails");
+  assert.equal(await panel.evaluate(() => thumbnailRequests), 0);
+  assert.equal(await panel.locator(".step-screenshots-toggle:visible").count(), 50);
+  const first = panel.locator(".step-card").first();
+  await first.locator(".step-screenshots-toggle").click();
+  await first.locator("img.step-screenshot").first().waitFor();
+  assert.equal(await first.locator(".step-screenshots-toggle").getAttribute("aria-expanded"), "true");
+  assert.equal(await first.locator(".step-media-row:visible").count(), 1);
+  assert.equal(await panel.locator(".step-media-row:visible").count(), 1);
+  const appended = { ...actions[0], id: "fold-appended" };
+  await writeActions(worker, [...await readActions(worker), appended]);
+  await panel.waitForFunction(() => document.querySelectorAll(".step-card").length === 51);
+  assert.equal(await panel.locator(".step-card").last().locator(".step-screenshots-toggle").getAttribute("aria-expanded"), "false");
+  assert.equal(await first.locator(".step-screenshots-toggle").getAttribute("aria-expanded"), "true");
+  await writeActions(worker, (await readActions(worker)).filter(action => action.id !== "fold-appended"));
+  await worker.evaluate(() => chrome.storage.local.set({ "action:fold-0": {
+    id: "fold-0", timestamp: 1, type: "click", pageName: "page1",
+    target: { tagName: "button", accessibleName: "Updated first action" },
+    screenshotBeforeKey: "fold-before", screenshotKey: "fold-after", screenshotStatus: "captured"
+  } }));
+  await first.locator(".step-description").filter({ hasText: "Updated first action" }).waitFor();
+  assert.equal(await first.locator(".step-screenshots-toggle").getAttribute("aria-expanded"), "true");
+  await first.locator(".step-media").first().click();
+  await panel.locator(".image-preview-close").waitFor();
+  await panel.locator(".image-preview-close").click();
+  await first.locator(".step-screenshots-toggle").click();
+  assert.equal(await first.locator("img.step-screenshot").count(), 0);
+  await panel.reload();
+  await panel.waitForFunction(() => document.querySelectorAll(".step-card").length === 50);
+  assert.equal(await panel.locator(".step-media-row:visible").count(), 0, "the default persists after reload");
+  if (process.env.SCREENSHOT_FOLD_PREVIEW_DIR) {
+    fs.mkdirSync(process.env.SCREENSHOT_FOLD_PREVIEW_DIR, { recursive: true });
+    await panel.screenshot({ path: path.join(process.env.SCREENSHOT_FOLD_PREVIEW_DIR, "collapsed-steps.png") });
+  }
+
+  const saved = await panel.evaluate(() => chrome.runtime.sendMessage({ action: "saveCase", name: "Folded workflow" }));
+  assert.equal(saved.success, true);
+  const details = await panel.evaluate(id => chrome.runtime.sendMessage({ action: "getCaseDetails", caseId: id }), saved.case.id);
+  assert.equal(details.case.actions.length, 50);
+  assert.equal(details.case.actions[0].screenshotBeforeKey, "fold-before");
+  const pendingDownload = panel.waitForEvent("download");
+  await panel.evaluate(list => RecorderExport.exportWorkflow(list, "folded-export"), details.case.actions.slice(0, 1));
+  const download = await pendingDownload;
+  const chunks = [];
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk);
+  const files = unzipSync(new Uint8Array(Buffer.concat(chunks)));
+  assert.ok(files["folded-export/screenshots/step-001-click-before.jpg"]);
+  assert.ok(files["folded-export/screenshots/step-001-click-after.jpg"]);
+
+  const preview = await context.newPage();
+  await preview.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/console.html?caseId=${saved.case.id}`);
+  await preview.locator("#preview-steps-container .step-card").first().waitFor();
+  await preview.locator("#preview-steps-container img.step-screenshot").first().waitFor();
+  assert.equal(await preview.locator(".step-screenshots-toggle:visible").count(), 0, "the preference only changes the side panel");
+
+  await panel.locator("#capture-settings-btn").click();
+  if (process.env.SCREENSHOT_FOLD_PREVIEW_DIR) {
+    await panel.screenshot({ path: path.join(process.env.SCREENSHOT_FOLD_PREVIEW_DIR, "screenshot-settings.png") });
+  }
+  await panel.locator("#sidebar-screenshots-expanded").check();
+  await panel.locator(".capture-settings-dialog .confirm-submit").click();
+  await panel.waitForFunction(() => document.querySelectorAll(".step-media-row[hidden]").length === 0);
+  await panel.locator(".step-card img.step-screenshot").first().waitFor();
+  assert.deepEqual(errors, []);
+});
+
 test("copy-to-AI tooltip stays fully visible above the step list", async (t) => {
   const extensionPath = path.resolve(__dirname, "..");
   const context = await chromium.launchPersistentContext("", {
@@ -1446,7 +1834,7 @@ test("clearing steps leaves saved cases intact and waits for an explicit start",
   if (!worker) worker = await context.waitForEvent("serviceworker");
   const extensionId = worker.url().split("/")[2];
   await worker.evaluate(() => chrome.storage.local.set({
-    uiLanguage: "zh_CN", recordingConsentVersion: 2, isRecording: false
+    uiLanguage: "zh_CN", recordingConsentVersion: 3, isRecording: false
   }));
 
   const page = await context.newPage();
@@ -1549,7 +1937,7 @@ test("records only the session-opening page navigation", async (t) => {
   // start has its own focused coverage further down.
   await serviceWorker.evaluate(() => chrome.storage.local.set({
     uiLanguage: "zh_CN",
-    recordingConsentVersion: 2
+    recordingConsentVersion: 3
   }));
 
   const page = await context.newPage();
@@ -1584,7 +1972,7 @@ test("records only the session-opening page navigation", async (t) => {
     tabId => chrome.tabs.sendMessage(tabId, { action: "pingRecorder" }).then(response => response?.status),
     rootTabId
   );
-  assert.equal(recorderAfterInvocation, "ready");
+  assert.equal(recorderAfterInvocation, undefined, "layout alone does not load recording listeners");
   await page.waitForFunction(() => document.querySelector("#wide-layout").getBoundingClientRect().width <= window.innerWidth + 1);
   assert.ok(await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).zoom) < 1));
 
@@ -1596,17 +1984,6 @@ test("records only the session-opening page navigation", async (t) => {
   }), { tabId: rootTabId, windowId: rootWindowId });
   assert.equal(restoreResponse.success, true);
   await page.waitForFunction(() => document.querySelector("#wide-layout").getBoundingClientRect().width === 2400);
-
-  await page.locator("#open-async-dialog").click();
-  await page.locator('[role="progressbar"]').waitFor({ state: "visible" });
-  const stability = await serviceWorker.evaluate((tabId) => chrome.tabs.sendMessage(
-    tabId,
-    { action: "waitForPageStable", options: { timeoutMs: 2500, quietMs: 300 } },
-    { frameId: 0 }
-  ), rootTabId);
-  assert.equal(stability.stable, true);
-  assert.ok(stability.waitedMs >= 300);
-  assert.equal(await page.locator("#async-result").innerText(), "Loaded result");
 
   const startResponse = await controller.evaluate((targetTabId) => chrome.runtime.sendMessage({
     action: "toggleRecording",
@@ -1636,6 +2013,19 @@ test("records only the session-opening page navigation", async (t) => {
   assert.match(firstCaptured[0].screenshotKey, /^screenshot:[^:]+:[a-z0-9]+$/);
   assert.equal(firstCaptured[0].screenshotStatus, "captured");
 
+  // Stability is available after recording starts. Trigger fixture setup through
+  // its page handler without adding a user step, after the opening capture drains.
+  await page.evaluate(() => document.querySelector("#open-async-dialog").click());
+  await page.locator('[role="progressbar"]').waitFor({ state: "visible" });
+  const stability = await serviceWorker.evaluate((tabId) => chrome.tabs.sendMessage(
+    tabId,
+    { action: "waitForPageStable", options: { timeoutMs: 2500, quietMs: 300 } },
+    { frameId: 0 }
+  ), rootTabId);
+  assert.equal(stability.stable, true);
+  assert.ok(stability.waitedMs >= 300);
+  assert.equal(await page.locator("#async-result").innerText(), "Loaded result");
+
   // Reloads and redirects are browser/application effects, not user steps.
   await page.reload({ waitUntil: "domcontentloaded" });
   assert.equal(await page.locator("#playwright-recorder-overlay").count(), 0);
@@ -1658,9 +2048,10 @@ test("records only the session-opening page navigation", async (t) => {
   assert.equal(actions[1].target.boundingBox.coordinateSpace, "top-viewport");
   assert.equal(actions[1].target.boundingBox.viewportWidth, 1920);
   assert.ok(
-    await countRedPixels(serviceWorker, actions[1].screenshotBeforeKey) > 50,
-    "the before screenshot should contain the recorded input's red target frame"
+    await countRedPixels(serviceWorker, actions[1].screenshotBeforeKey) === 0,
+    "the original before screenshot should not bake in a target frame"
   );
+  assert.deepEqual(actions[1].screenshotBeforeHighlight, actions[1].target.boundingBox);
 
   await page.locator("#noop-action").click();
   await new Promise(resolve => setTimeout(resolve, 1400));
@@ -1818,7 +2209,7 @@ test("records only the session-opening page navigation", async (t) => {
   const screenshotAction = actions.find(action => action.screenshotKey);
   const screenshotSize = await serviceWorker.evaluate(async (key) => {
     const db = await new Promise((resolve, reject) => {
-      const request = indexedDB.open("PlaywrightRecorderDB", 1);
+      const request = indexedDB.open("PlaywrightRecorderDB");
       request.onsuccess = event => resolve(event.target.result);
       request.onerror = event => reject(event.target.error);
     });
@@ -1851,6 +2242,7 @@ test("records only the session-opening page navigation", async (t) => {
   assert.equal(await popup.title(), "流程录制 - 侧边栏");
   assert.equal(await popup.locator(".logo-area").count(), 0);
   assert.equal(await popup.locator("#record-btn").isVisible(), true);
+  await popup.waitForFunction(() => document.getElementById("record-btn").dataset.recordingMode === "continue");
   assert.equal((await popup.locator("#record-btn-label").innerText()).trim(), "继续录制");
   assert.equal(await popup.locator("#manual-screenshot-btn").isHidden(), true);
   assert.equal(await popup.locator("#history-btn").count(), 0);
@@ -2090,7 +2482,7 @@ test("records only the session-opening page navigation", async (t) => {
     check();
   }), casesBeforeImport + 1);
   const importedCase = (await readCases(serviceWorker)).find(item =>
-    /^case_import_/.test(item.id) && item.name === "菜单基础步骤"
+    /^case_import_/.test(item.id) && item.name === "菜单基础步骤（2）"
   );
   assert.ok(importedCase);
   assert.equal(importedCase.actions.length, savedSnapshot.actions.length);
@@ -2240,7 +2632,7 @@ test("records only the session-opening page navigation", async (t) => {
   await waitForCondition(
     async () => (await serviceWorker.evaluate(
       async () => chrome.storage.local.get("recordingConsentVersion")
-    )).recordingConsentVersion === 2,
+    )).recordingConsentVersion === 3,
     "recording consent to be stored"
   );
   await popup.evaluate(() => chrome.runtime.sendMessage({ action: "toggleRecording", start: false }));
@@ -2483,7 +2875,7 @@ test("a paused recording re-adopts the window it opened before the pause", async
   if (!serviceWorker) serviceWorker = await context.waitForEvent("serviceworker");
   await serviceWorker.evaluate(() => chrome.storage.local.set({
     uiLanguage: "zh_CN",
-    recordingConsentVersion: 2,
+    recordingConsentVersion: 3,
     isRecording: false
   }));
 
@@ -2561,6 +2953,191 @@ test("a paused recording re-adopts the window it opened before the pause", async
   );
 });
 
+test("unannotated JS close controls record their effect while inert and synthetic clicks stay filtered", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, captureSettings: { screenshots: false } }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base`);
+  await page.evaluate(() => {
+    const controls = document.createElement("div");
+    controls.innerHTML = `<style>.my-icon-close {display:inline-block;width:24px;height:24px;cursor:auto}.my-icon-close::before{content:'×'}</style>
+      <div id="custom-dialog"><span id="custom-close" data-v-a506f636="" class="my-icon-close close"></span></div>
+      <div id="hidden-dialog"><span id="hidden-close" data-v-a506f636="" class="my-icon-close close"></span></div>
+      <span id="inert-close" data-v-a506f636="" class="my-icon-close close"></span>`;
+    controls.querySelector("#custom-close").addEventListener("click", () => controls.querySelector("#custom-dialog").remove());
+    controls.querySelector("#hidden-close").addEventListener("click", () => { controls.querySelector("#hidden-dialog").style.display = "none"; });
+    document.body.prepend(controls);
+  });
+  const rootTabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url).id, page.url());
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  const toggle = start => panel.evaluate(({ tabId, start }) => chrome.runtime.sendMessage({ action: "toggleRecording", start, rootTabId: tabId }), { tabId: rootTabId, start });
+  assert.equal((await toggle(true)).success, true);
+  const diagnostics = [];
+  page.on("console", message => diagnostics.push(message.text()));
+  worker.on("console", message => diagnostics.push(message.text()));
+  assert.equal(await page.locator("#custom-close").evaluate(element => getComputedStyle(element).cursor), "auto");
+  await page.locator("#custom-close").click();
+  await waitForActions(worker, list => list.some(action => action.target?.id === "custom-close"));
+  assert.equal(await page.locator("#custom-dialog").count(), 0);
+  await page.locator("#hidden-close").click();
+  await waitForActions(worker, list => list.some(action => action.target?.id === "hidden-close"));
+  assert.equal(await page.locator("#hidden-dialog").isVisible(), false);
+  await page.locator("#inert-close").click();
+  await waitForCondition(() => diagnostics.some(line => line.includes("no-observable-effect")), "inert click effect rejection");
+  await page.evaluate(() => document.querySelector("#inert-close").click());
+  await waitForCondition(() => diagnostics.some(line => line.includes("untrusted-event")), "synthetic click rejection");
+  assert.equal((await toggle(false)).success, true);
+  const actions = await readActions(worker);
+  const clicks = actions.filter(action => action.type === "click");
+  assert.deepEqual(clicks.map(action => action.target.id), ["custom-close", "hidden-close"]);
+  assert.equal(clicks[0].target.role, null, "a JS handler does not fabricate a button role");
+  assert.match(clicks[0].target.outerHTML, /my-icon-close close/);
+});
+
+test("closing a layui-style dialog from inside its iframe records the source click and keeps the parent recording", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, captureSettings: { screenshots: true } }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base`);
+  const topUrl = page.url();
+  await page.evaluate(() => {
+    for (const [layerId, frameId] of [["layui-layer4", "layui-layer-iframe4"], ["native-layer", "native-close-frame"]]) {
+      const layer = document.createElement("div");
+      layer.className = "layui-layer layui-layer-iframe";
+      layer.id = layerId;
+      layer.innerHTML = `<div class="layui-layer-content"><iframe id="${frameId}" name="${frameId}" src="/self-closing-frame" style="height:100px"></iframe></div>`;
+      document.body.prepend(layer);
+    }
+  });
+  const customFrame = page.frameLocator("#layui-layer-iframe4");
+  const nativeFrame = page.frameLocator("#native-close-frame");
+  await customFrame.locator("#custom-frame-close").waitFor();
+  await nativeFrame.locator("#native-frame-close").waitFor();
+  const rootTabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url).id, topUrl);
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  const toggle = start => panel.evaluate(({ tabId, start }) => chrome.runtime.sendMessage({ action: "toggleRecording", start, rootTabId: tabId }), { tabId: rootTabId, start });
+  assert.equal((await toggle(true)).success, true);
+  const diagnostics = [];
+  worker.on("console", message => diagnostics.push(message.text()));
+  await customFrame.locator("#frame-inert").click();
+  await waitForCondition(() => diagnostics.some(line => line.includes("no-observable-effect")), "inert iframe click rejection");
+  await customFrame.locator("#custom-frame-close").click();
+  let actions = await waitForActions(worker, list => list.some(action => action.target?.id === "custom-frame-close" && action.screenshotKey));
+  const custom = actions.find(action => action.target?.id === "custom-frame-close");
+  assert.equal(custom.frameClosedAfterClick, true);
+  assert.equal(custom.target.frameInfo.frameName, "layui-layer-iframe4");
+  assert.equal(custom.screenshotSkippedReason, undefined);
+  assert.equal(await page.locator("#layui-layer4").count(), 0);
+  assert.equal(page.url(), topUrl);
+  await nativeFrame.locator("#native-frame-close").click();
+  actions = await waitForActions(worker, list => list.some(action => action.target?.id === "native-frame-close" && action.screenshotKey));
+  assert.equal(actions.find(action => action.target?.id === "native-frame-close").frameClosedAfterClick, true);
+  await page.locator("#effect-action").click();
+  actions = await waitForActions(worker, list => list.some(action => action.target?.id === "effect-action" && action.screenshotKey));
+  assert.equal(actions.some(action => action.target?.id === "frame-inert"), false);
+  assert.equal(actions.find(action => action.target?.id === "effect-action").pageName, "page1");
+  assert.equal((await toggle(false)).success, true);
+  const doc = await panel.evaluate(list => StepDocGenerator.generate(list), actions);
+  assert.match(doc, /in iframe\[name=layui-layer-iframe4\]/);
+  assert.match(doc, /source iframe closed after this step/);
+  assert.doesNotMatch(doc, /^   page closed after this step$/m);
+});
+
+test("branch menu recording normalizes SVG and text hits without inventing hover steps", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, captureSettings: { screenshots: false } }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base`);
+  await page.evaluate(() => {
+    const container = document.createElement("div");
+    container.innerHTML = `<button id="branch-toggle" style="cursor:pointer" aria-expanded="false">
+      <svg id="branch-icon" class="branch-icon" width="20" height="20"><rect width="20" height="20"/></svg>
+      <span id="branch-label">standard-V11.x-develop</span>
+    </button><div class="dropdown-menu" hidden>
+      <div class="dropdown-input"><input placeholder="Search branches"></div>
+      <div class="dropdown-content"><ul><li><a id="branch-option" href="#selected">standard-V10.x-develop-bap</a></li></ul></div>
+    </div>`;
+    const button = container.querySelector("button");
+    button.setAttribute("title", "Branch menu details ".repeat(30));
+    button.setAttribute("data-testid", "branch-picker");
+    const menu = container.querySelector(".dropdown-menu");
+    button.addEventListener("click", () => {
+      menu.hidden = !menu.hidden;
+      button.setAttribute("aria-expanded", String(!menu.hidden));
+    });
+    container.querySelector("a").addEventListener("click", () => { menu.hidden = true; });
+    document.body.prepend(container);
+  });
+  const rootTabId = await worker.evaluate(async url =>
+    (await chrome.tabs.query({})).find(tab => tab.url === url).id, page.url());
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await panel.waitForFunction(() => window.StepDocGenerator);
+  const toggle = start => panel.evaluate(({ tabId, start }) => chrome.runtime.sendMessage({
+    action: "toggleRecording", start, rootTabId: tabId
+  }), { tabId: rootTabId, start });
+  assert.equal((await toggle(true)).success, true);
+  await page.locator("#branch-icon").click({ position: { x: 5, y: 5 } });
+  await waitForActions(worker, actions => actions.some(action => action.hitTarget?.tagName === "rect"));
+  await page.locator("#branch-option").click();
+  await waitForActions(worker, actions => actions.some(action => action.target?.id === "branch-option"));
+  await page.locator("#branch-label").click();
+  await waitForActions(worker, actions => actions.some(action => action.hitTarget?.id === "branch-label"));
+  let steps = await readActions(worker);
+  assert.equal(steps.filter(action => action.type === "hover").length, 0, "menu structure cannot invent user actions");
+  const buttonClicks = steps.filter(action => action.target?.id === "branch-toggle");
+  assert.equal(buttonClicks.length, 2);
+  for (const action of buttonClicks) {
+    assert.equal(action.target.tagName, "button");
+    assert.equal(action.accessibility.role, "button", JSON.stringify(action.accessibility));
+    assert.equal(action.accessibility.name, "standard-V11.x-develop");
+  }
+  const svgClasses = await worker.evaluate(tabId => chrome.scripting.executeScript({
+    target: { tabId }, world: "ISOLATED",
+    func: () => window.SemanticElementAnalyzer.analyze(document.querySelector("#branch-icon")).className
+  }), rootTabId);
+  assert.equal(svgClasses[0].result, "branch-icon");
+  await page.locator("#branch-icon").hover({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Alt+h");
+  await waitForActions(worker, actions => actions.some(action => action.type === "hover"));
+  assert.equal((await toggle(false)).success, true);
+  steps = await readActions(worker);
+  assert.equal(steps.filter(action => action.type === "hover").length, 1, "explicit hover shortcut still records");
+  const doc = await panel.evaluate(actions => window.StepDocGenerator.generateTask("Branch menu", actions), steps);
+  assert.match(doc, /recorded hit: <rect>/);
+  assert.match(doc, /recorded hit: <span id="branch-label">/);
+  assert.match(doc, /DOM attribute hints: .*"data-testid":"branch-picker"/);
+  assert.match(doc, /HTML snapshot truncated/);
+  assert.doesNotMatch(doc, /\[object Object\]/);
+});
+
 test("a recording can be configured to save no screenshots at all", async (t) => {
   const fixture = await startFixtureServer();
   t.after(() => fixture.close());
@@ -2577,7 +3154,7 @@ test("a recording can be configured to save no screenshots at all", async (t) =>
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent("serviceworker");
   await worker.evaluate(() => chrome.storage.local.set({
-    isRecording: false, uiLanguage: "zh_CN", recordingConsentVersion: 2
+    isRecording: false, uiLanguage: "zh_CN", recordingConsentVersion: 3
   }));
 
   const page = await context.newPage();
@@ -2624,12 +3201,67 @@ test("a recording can be configured to save no screenshots at all", async (t) =>
   await panel.locator(".capture-settings-dialog .confirm-submit").click();
   assert.equal(await panel.locator("#manual-screenshot-btn").isHidden(), true);
   await page.bringToFront();
+  await page.evaluate(() => {
+    const button = document.createElement("button");
+    button.id = "ax-icon-button";
+    button.innerHTML = '<img alt="Open tools" width="20" height="20" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">';
+    button.addEventListener("click", () => { document.body.dataset.iconClicked = "true"; });
+    document.body.prepend(button);
+    const unnamed = document.createElement("button");
+    unnamed.id = "ax-unnamed-button";
+    unnamed.style.cssText = "width:30px;height:20px";
+    unnamed.addEventListener("click", () => { document.body.dataset.unnamedClicked = "true"; });
+    document.body.prepend(unnamed);
+    const parent = document.createElement("button");
+    parent.setAttribute("aria-label", "More actions");
+    parent.innerHTML = '<span id="ax-ignored-icon" aria-hidden="true" onclick="void 0" style="cursor:pointer;display:inline-block;padding:8px">...</span>';
+    parent.addEventListener("click", () => { document.body.dataset.moreClicked = "true"; });
+    document.body.prepend(parent);
+  });
+  await page.locator("#ax-icon-button img").click();
+  await waitForActions(worker, current => current.some(action => action.target?.id === "ax-icon-button"));
+  await page.locator("#ax-unnamed-button").click();
+  await waitForActions(worker, current => current.some(action => action.target?.id === "ax-unnamed-button"));
+  await page.locator("#ax-ignored-icon").click();
+  await waitForActions(worker, current => current.some(action => action.target?.id === "ax-ignored-icon"));
+  assert.equal(await page.locator("body").getAttribute("data-more-clicked"), "true");
+  const frame = page.frameLocator("#formdesign-frame");
+  await frame.locator("body").evaluate(body => {
+    const button = document.createElement("button");
+    button.id = "ax-frame-button";
+    button.setAttribute("aria-label", "Frame tool");
+    button.textContent = "Tool";
+    button.style.cssText = "position:absolute;left:10px;top:110px";
+    button.addEventListener("click", () => { body.dataset.toolClicked = "true"; });
+    body.append(button);
+  });
+  await frame.locator("#ax-frame-button").click();
+  await waitForActions(worker, current => current.some(action => action.target?.id === "ax-frame-button"));
   await page.locator("#effect-action").click();
   await waitForActions(worker, current => current.some(action => action.target?.id === "effect-action"));
   await panel.evaluate(() => chrome.runtime.sendMessage({ action: "toggleRecording", start: false }));
 
   const steps = await readActions(worker);
   assert.ok(steps.length >= 2, "the steps were recorded");
+  const clicked = steps.find(step => step.target?.id === "effect-action");
+  assert.equal(clicked.accessibility.status, "captured", JSON.stringify(clicked.accessibility));
+  assert.equal(clicked.accessibility.role, "button");
+  assert.equal(clicked.accessibility.name, "Visible effect");
+  assert.equal(clicked.target._axRef, undefined);
+  const icon = steps.find(step => step.target?.id === "ax-icon-button");
+  assert.ok(!icon.target.accessibleName, "DOM-derived hint stays separate");
+  assert.equal(icon.accessibility.name, "Open tools", "browser includes descendant image alt text");
+  const unnamed = steps.find(step => step.target?.id === "ax-unnamed-button");
+  assert.equal(unnamed.accessibility.status, "captured");
+  assert.equal(unnamed.accessibility.name, "", "an empty browser name is not invented");
+  const framed = steps.find(step => step.target?.id === "ax-frame-button");
+  assert.equal(framed.accessibility.name, "Frame tool", JSON.stringify(framed.accessibility));
+  const ignored = steps.find(step => step.target?.id === "ax-ignored-icon");
+  assert.equal(ignored.accessibility.status, "ignored", JSON.stringify(ignored.accessibility));
+  assert.equal(ignored.accessibility.relatedAncestor.name, "More actions");
+  assert.equal(ignored.accessibility.relatedAncestor.distance, 1);
+  assert.equal(await worker.evaluate(tabId => chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: "1" })
+    .then(() => true, () => false), rootTabId), false, "the extension detached its own debugger session");
   for (const step of steps) {
     assert.equal(step.screenshotKey, undefined);
     assert.equal(step.screenshotBeforeKey, undefined);
@@ -2661,6 +3293,10 @@ test("a recording can be configured to save no screenshots at all", async (t) =>
   const files = unzipSync(new Uint8Array(Buffer.concat(chunks)));
   const markdown = strFromU8(files["无截图用例/无截图用例.md"]);
   assert.match(markdown, /Recorded Workflow/);
+  assert.match(markdown, /AX context \(browser-computed\).*Visible effect/);
+  assert.match(markdown, /target is ignored by the browser accessibility tree; use DOM context/);
+  assert.match(markdown, /not the clicked node.*More actions/);
+  assert.doesNotMatch(markdown, /"role":"none"/);
   assert.doesNotMatch(markdown, /## Step screenshots/);
   assert.deepEqual(Object.keys(files).filter(name => name.includes("/screenshots/")), []);
 
@@ -2867,11 +3503,20 @@ test("workbench renames a case without losing its folder, selection or loaded wo
   await popup.locator("#more-actions-btn").click();
   const downloaded = popup.waitForEvent("download");
   await popup.locator("#download-doc-btn").click();
-  await downloaded;
+  assert.equal((await downloaded).suggestedFilename(), "新用例名称（2）.zip");
   const afterDownload = await send({ action: "listCases" });
   assert.equal(afterDownload.cases.length, 2);
   assert.ok(afterDownload.cases.every(item => item.folderId === folder.folder.id));
-  assert.ok(afterDownload.cases.every(item => item.name === "新用例名称"));
+  assert.deepEqual(afterDownload.cases.map(item => item.name).sort(), ["新用例名称", "新用例名称（2）"]);
+  await page.reload();
+  await page.locator("#all-cases-btn").click();
+  await row.locator(".rename").click();
+  await page.locator(".prompt-text-dialog input").fill("新用例名称（2）");
+  await page.locator(".confirm-submit").click();
+  assert.equal(await page.locator(".prompt-text-dialog").isVisible(), true);
+  assert.match(await page.locator("#prompt-validation-error").innerText(), /already exists/i);
+  assert.equal((await send({ action: "getCaseDetails", caseId: saved.case.id })).case.name, "新用例名称");
+  await page.locator(".confirm-cancel").click();
   assert.deepEqual(errors, []);
 });
 
@@ -2933,4 +3578,228 @@ test("offscreen screenshots release object URLs and reload when revisited", asyn
   await consolePage.locator("#console-close-preview").click();
   assert.equal(await consolePage.evaluate(() => livePreviewUrls.size), 0);
   assert.equal(await consolePage.locator("#console-preview-image").getAttribute("src"), null);
+});
+
+test("large recordings bound DOM and thumbnail size while keeping target overlays and selection correct", async (t) => {
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.setViewportSize({ width: 360, height: 720 });
+  await page.addInitScript(() => {
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
+    globalThis.fullActionReads = 0;
+    chrome.runtime.sendMessage = (message, ...args) => {
+      if (message.action === "getActions") fullActionReads++;
+      return send(message, ...args);
+    };
+  });
+  await page.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await page.evaluate(() => chrome.runtime.sendMessage({ action: "getSchemaState" }));
+  await worker.evaluate(async () => {
+    await chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN" });
+    const canvas = new OffscreenCanvas(1920, 1080);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 1920, 1080);
+    await RecorderMediaStore.putBlob("large-original", await canvas.convertToBlob({ type: "image/jpeg" }));
+  });
+  const box = { coordinateSpace: "top-viewport", x: 200, y: 100, width: 200, height: 80,
+    viewportWidth: 1920, viewportHeight: 1080 };
+  await writeActions(worker, Array.from({ length: 1000 }, (_, index) => ({
+    id: `large-${index}`, type: "click", timestamp: index + 1, pageName: "page1",
+    target: { tagName: "button", accessibleName: `Operation ${index + 1}` },
+    screenshotBeforeKey: "large-original", screenshotBeforeHighlight: box,
+    screenshotKey: "large-original", screenshotStatus: "captured"
+  })));
+  await page.waitForFunction(() => document.getElementById("step-count").textContent === "1000");
+  await page.locator(".step-screenshot").first().waitFor();
+  await page.waitForFunction(() => document.querySelector(".step-screenshot")?.naturalWidth > 0);
+  assert.ok(await page.locator(".step-card").count() < 40);
+  assert.ok(await page.locator(".step-screenshot").first().evaluate(image => image.naturalWidth <= 320 && image.naturalHeight <= 320));
+  assert.ok(await page.evaluate(async () => !!await RecorderMediaStore.getThumbnail("large-original")));
+  // Appending to an already-open, empty panel follows the new last step.
+  // Bring step 1 back into the virtual window before testing its live patch.
+  await page.locator("#steps-container").evaluate(container => { container.scrollTop = 0; });
+  await page.waitForFunction(() => document.querySelector(".step-index")?.textContent === "1");
+  const reads = await page.evaluate(() => fullActionReads);
+  await worker.evaluate(async () => {
+    const stored = await chrome.storage.local.get("action:large-0");
+    stored["action:large-0"].target.accessibleName = "Updated in place";
+    await chrome.storage.local.set(stored);
+    chrome.runtime.sendMessage({ action: "stepsUpdated" }).catch(() => {});
+  });
+  await page.waitForFunction(() => document.querySelector(".step-description")?.textContent.includes("Updated in place"));
+  assert.equal(await page.evaluate(() => fullActionReads), reads, "a single-record change should not reread all steps");
+
+  await page.locator(".step-media").first().click();
+  await page.locator(".image-preview-full").waitFor({ state: "visible" });
+  await page.screenshot({ path: path.join(require("node:os").tmpdir(), "workflow-recorder-highlight-preview.png") });
+  const checkOverlay = () => page.evaluate(() => {
+    const image = document.querySelector(".image-preview-full");
+    const svg = document.querySelector(".image-preview-stage .screenshot-highlight");
+    const frame = svg.querySelector("rect").getBoundingClientRect();
+    const bounds = image.getBoundingClientRect();
+    return { centerX: (frame.x + frame.width / 2 - bounds.x) / bounds.width,
+      centerY: (frame.y + frame.height / 2 - bounds.y) / bounds.height,
+      sameTransform: image.style.transform === svg.style.transform };
+  });
+  for (const width of [360, 900]) {
+    await page.setViewportSize({ width, height: 720 });
+    await page.locator('[data-action="zoom-in"]').click();
+    const stage = await page.locator(".image-preview-stage").boundingBox();
+    await page.mouse.move(stage.x + stage.width / 2, stage.y + stage.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + stage.width / 2 + 20, stage.y + stage.height / 2 + 15);
+    await page.mouse.up();
+    const geometry = await checkOverlay();
+    assert.ok(Math.abs(geometry.centerX - 300 / 1920) < 0.001);
+    assert.ok(Math.abs(geometry.centerY - 140 / 1080) < 0.001);
+    assert.equal(geometry.sameTransform, true);
+  }
+  await page.locator('[data-action="next"]').click();
+  await page.waitForFunction(() => document.querySelector(".image-preview-title")?.textContent.includes("操作后"));
+  assert.equal(await page.locator(".image-preview-stage .screenshot-highlight").isVisible(), false);
+  await page.locator(".image-preview-close").click();
+  await page.setViewportSize({ width: 360, height: 720 });
+  await page.locator("#step-select-all").check();
+  assert.equal(await page.locator("#step-count").innerText(), "1000/1000");
+  await page.locator("#step-select-all").uncheck();
+  await page.locator("#steps-container").evaluate(container => { container.scrollTop = container.scrollHeight; });
+  await page.waitForFunction(() => [...document.querySelectorAll(".step-index")].some(el => el.textContent === "1000"));
+  assert.ok(await page.locator(".step-card").count() < 40);
+  await page.locator(".step-card.is-last-step .step-media").first().click();
+  await page.locator(".image-preview-full").waitFor({ state: "visible" });
+  await page.locator('[data-action="next"]').click();
+  await page.waitForFunction(() => {
+    const title = document.querySelector(".image-preview-title")?.textContent || "";
+    return title.includes("1000") && title.includes("操作后");
+  });
+  assert.equal(await page.locator('[data-action="next"]').isDisabled(), true,
+    "a shared image key must not reset gallery navigation to the first step");
+  await page.locator(".image-preview-close").click();
+  await page.locator(".step-card.is-last-step .step-delete-btn").click();
+  await page.locator(".confirm-submit").click();
+  await page.waitForFunction(() => document.getElementById("step-count").textContent === "999");
+  assert.equal((await readActions(worker)).some(action => action.id === "large-999"), false);
+  assert.deepEqual(errors, []);
+});
+
+test("media upgrade preserves originals and high-DPI highlights survive export and package import", async (t) => {
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const extensionURL = `chrome-extension://${worker.url().split("/")[2]}`;
+  await page.goto(`${extensionURL}/ui/console.html`);
+  await page.evaluate(() => chrome.runtime.sendMessage({ action: "getSchemaState" }));
+  const result = await page.evaluate(async () => {
+    await RecorderMediaStore.getAllKeys();
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase("PlaywrightRecorderDB");
+      request.onsuccess = resolve;
+      request.onerror = () => reject(request.error);
+    });
+    const canvas = new OffscreenCanvas(1600, 900);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 1600, 900);
+    const original = await canvas.convertToBlob({ type: "image/jpeg" });
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("PlaywrightRecorderDB", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("blobs");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction("blobs", "readwrite");
+      transaction.objectStore("blobs").put(original, "migration-original");
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    db.close();
+    const restored = await RecorderMediaStore.getBlob("migration-original");
+    const highlight = { coordinateSpace: "top-viewport", x: 200, y: 100, width: 100, height: 40,
+      viewportWidth: 800, viewportHeight: 450 };
+    const action = { id: "migration-step", type: "click", timestamp: 1, pageName: "page1",
+      target: { tagName: "button", accessibleName: "Target" }, screenshotBeforeKey: "migration-original",
+      screenshotBeforeHighlight: highlight, screenshotKey: "migration-original", screenshotStatus: "captured" };
+    // A real export reads a published workspace/case. Keep that source referenced
+    // while the import's orphan cleanup runs after its publication lock releases.
+    await chrome.storage.local.set({ actionOrder: [action.id], [`action:${action.id}`]: action });
+    let archive;
+    const create = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = blob => { if (blob.type === "application/zip") archive = blob; return create(blob); };
+    try { await RecorderExport.exportWorkflow([action], "highlight-export"); }
+    finally { URL.createObjectURL = create; }
+    const files = fflate.unzipSync(new Uint8Array(await archive.arrayBuffer()));
+    async function redPixels(blob) {
+      const bitmap = await createImageBitmap(blob);
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const context = canvas.getContext("2d");
+      context.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index] > 180 && pixels[index + 1] < 120 && pixels[index + 2] < 120) count++;
+      }
+      canvas.width = canvas.height = 1;
+      return count;
+    }
+    const before = new Blob([files["highlight-export/screenshots/step-001-click-before.jpg"]], { type: "image/jpeg" });
+    const after = new Blob([files["highlight-export/screenshots/step-001-click-after.jpg"]], { type: "image/jpeg" });
+    const sourceCase = { id: "source-case", name: "Raw geometry", createdAt: 1, pages: [], actions: [action] };
+    const portable = await RecorderCasePackage.buildCasePackage([sourceCase], { asBlob: true });
+    await RecorderCasePackage.importCasePackage(portable);
+    const list = await chrome.runtime.sendMessage({ action: "listCases" });
+    const detail = await chrome.runtime.sendMessage({ action: "getCaseDetails", caseId: list.cases[0].id });
+    const imported = detail.case.actions[0];
+    await RecorderMediaStore.getThumbnail("migration-original");
+    await chrome.storage.session.set({ recorderImagePreviewSequence: { items: [
+      { key: "migration-original", alt: "High DPI target", highlight }
+    ] } });
+    return { preserved: original.size === restored.size, beforeRed: await redPixels(before),
+      afterRed: await redPixels(after), rawRed: await redPixels(restored),
+      importedHighlight: imported.screenshotBeforeHighlight,
+      importedRed: await redPixels(await RecorderMediaStore.getBlob(imported.screenshotBeforeKey)), highlight };
+  });
+  assert.equal(result.preserved, true);
+  assert.ok(result.beforeRed > 50);
+  assert.equal(result.afterRed, 0);
+  assert.equal(result.rawRed, 0);
+  assert.equal(result.importedRed, 0);
+  assert.deepEqual(result.importedHighlight, result.highlight);
+  await page.goto(`${extensionURL}/ui/console.html?previewKey=migration-original`);
+  await page.locator("#console-preview-image").waitFor({ state: "visible" });
+  await page.locator("#console-zoom-in").click();
+  const geometry = await page.evaluate(() => {
+    const image = document.getElementById("console-preview-image");
+    const svg = document.querySelector("#console-preview-stage .screenshot-highlight");
+    const frame = svg.querySelector("rect").getBoundingClientRect(), bounds = image.getBoundingClientRect();
+    return { centerX: (frame.x + frame.width / 2 - bounds.x) / bounds.width,
+      centerY: (frame.y + frame.height / 2 - bounds.y) / bounds.height,
+      sameTransform: image.style.transform === svg.style.transform };
+  });
+  assert.ok(Math.abs(geometry.centerX - 250 / 800) < 0.001);
+  assert.ok(Math.abs(geometry.centerY - 120 / 450) < 0.001);
+  assert.equal(geometry.sameTransform, true);
+  assert.equal(await page.evaluate(async () => {
+    await RecorderMediaStore.putThumbnail("migration-original", new Blob(["thumbnail"]));
+    await RecorderMediaStore.deleteBlob("migration-original");
+    return !!await RecorderMediaStore.getThumbnail("migration-original");
+  }), false, "deleting the original must delete its thumbnail in the same transaction");
+  assert.deepEqual(errors, []);
 });

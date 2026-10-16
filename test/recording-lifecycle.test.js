@@ -8,6 +8,8 @@ function contentHarness() {
   const listeners = {};
   const timers = new Map();
   const sent = [];
+  const deliveries = [];
+  const replies = [];
   let messageHandler;
   let nextTimer = 0;
   const noop = () => {};
@@ -23,7 +25,7 @@ function contentHarness() {
       runtime: {
         onMessage: { addListener: fn => { messageHandler = fn; } },
         connect: () => ({ onDisconnect: { addListener: noop }, disconnect: noop }),
-        sendMessage: message => sent.push(message)
+        sendMessage: (message, callback) => { sent.push(message); deliveries.push(callback); }
       }
     },
     WorkflowRecorderProtocol: { MESSAGE: Object.fromEntries(
@@ -42,8 +44,8 @@ function contentHarness() {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "content", file), "utf8"), context);
   }
   return {
-    sent, timers,
-    message: action => messageHandler({ action, recordNavigate: false }, {}, noop),
+    sent, timers, deliveries, replies,
+    message: action => messageHandler({ action, recordNavigate: false }, {}, reply => replies.push(reply.status)),
     input: () => listeners.input({ target: field, isTrusted: true })
   };
 }
@@ -59,6 +61,44 @@ test("stop commits pending input and resets deduplication for the next recording
     assert.equal(h.sent.filter(message => message.payload?.type === "type").length, session + 1);
   }
   assert.equal(h.sent[0].payload.value, "draft");
+});
+
+test("stop acknowledges only after flushed actions have been committed by the worker", async () => {
+  const h = contentHarness();
+  h.message("startRecording");
+  h.input();
+  assert.equal(h.message("stopRecording"), true, "the response channel stays open");
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(h.replies, ["started"]);
+  h.deliveries[0]({ success: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.replies, ["started", "stopped"]);
+});
+
+test("session stop waits for every iframe reply before draining and detaching", async () => {
+  const replies = new Map();
+  const events = [];
+  globalThis.chrome = {
+    storage: { local: { get: async () => ({ isRecording: true }) } },
+    webNavigation: { getAllFrames: async () => [{ frameId: 0 }, { frameId: 9 }] },
+    tabs: { sendMessage: async (tabId, message, options) => new Promise(resolve => replies.set(options.frameId, resolve)) }
+  };
+  const { createRecordingSession } = await import("../background/recording/session.js");
+  const session = createRecordingSession({
+    scope: { readScope: async () => ({ recordingTabIds: [1] }), clearScope: async () => events.push("clear") },
+    drainActions: async () => events.push("drain"),
+    screenshots: { flush: async () => events.push("flush") },
+    screencast: { stopAll: async () => events.push("detach") }
+  });
+  const stopped = session.toggle(false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([...replies.keys()], [0, 9]);
+  replies.get(0)({ status: "stopped" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, [], "a top-frame reply cannot bypass an iframe's input commit");
+  replies.get(9)({ status: "stopped" });
+  await stopped;
+  assert.deepEqual(events, ["drain", "flush", "detach", "clear"]);
 });
 
 test("failed CDP start stops content recording, clears scope and allows retry", async () => {
@@ -177,5 +217,5 @@ test("stopAll waits for a pending attach and detaches it before returning", asyn
   release();
   await Promise.all([starting, stopping]);
   assert.equal(capture.has(1), false);
-  assert.deepEqual(calls, ["Page.enable", "Page.startScreencast", "Page.stopScreencast", "detach"]);
+  assert.deepEqual(calls, ["Runtime.enable", "Page.enable", "Page.startScreencast", "Page.stopScreencast", "detach"]);
 });

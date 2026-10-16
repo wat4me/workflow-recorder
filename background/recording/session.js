@@ -75,10 +75,11 @@ export function createRecordingSession({ t, scope, cases, screencast, screenshot
       for (const tab of sessionTabs) {
         try {
           await injectRecordingScripts(tab.id, recordNavigate);
-          // Recordings that want no screenshots never attach the debugger, which
-          // is what keeps their memory flat and Chrome's "debugging this browser"
-          // banner off the screen.
-          if (capturePlan.screenshots) await screencast.start(tab.id, capturePlan);
+          // AX collection shares the debugger transport even when images are off.
+          await screencast.start(tab.id, capturePlan).catch(error => {
+            if (capturePlan.screenshots) throw error;
+            console.warn("[Accessibility] Debugger unavailable:", error.message);
+          });
         } catch (error) {
           // Failing on the tab the user started from fails the session. A tab that
           // was only re-adopted is retried when it is next activated or navigates,
@@ -108,9 +109,20 @@ export function createRecordingSession({ t, scope, cases, screencast, screenshot
     // In parallel: these are independent tabs, and doing them in sequence adds a
     // message round trip per tab to how long the debugging infobar stays up.
     // Rejections are ignored because a tab may already be closed.
-    await Promise.all(recordingTabIds.map(tabId =>
-      chrome.tabs.sendMessage(Number(tabId), { action: MESSAGE.stopRecording }).catch(() => {})
-    ));
+    await Promise.all(recordingTabIds.map(async tabId => {
+      // A tab-wide send reaches every frame but resolves with just one reply.
+      // Wait for each frame separately, otherwise the top frame can acknowledge
+      // before an iframe has committed its final input into this draft.
+      const id = Number(tabId);
+      let frames = null;
+      try { frames = await chrome.webNavigation?.getAllFrames({ tabId: id }); } catch { /* Tab closed. */ }
+      if (Array.isArray(frames) && frames.length) {
+        await Promise.all(frames.map(frame => chrome.tabs.sendMessage(id,
+          { action: MESSAGE.stopRecording }, { frameId: frame.frameId }).catch(() => {})));
+      } else {
+        await chrome.tabs.sendMessage(id, { action: MESSAGE.stopRecording }).catch(() => {});
+      }
+    }));
 
     // Order matters: let queued action writes land, then let pending screenshots
     // bind to them, and only then tear down the CDP sessions those need.

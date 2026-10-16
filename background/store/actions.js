@@ -95,12 +95,12 @@ export async function replaceActionId(previousId, nextAction) {
 }
 
 /** Replaces the whole list, dropping records the new list no longer references. */
-export async function replaceActions(actions) {
+export async function replaceActions(actions, extraWrites = {}) {
   const previousOrder = await readOrder();
   const nextOrder = actions.map(action => action.id).filter(Boolean);
   const retained = new Set(nextOrder);
 
-  const writes = { [ORDER_KEY]: nextOrder };
+  const writes = { ...extraWrites, [ORDER_KEY]: nextOrder };
   for (const action of actions) {
     if (action.id) writes[storageKey(action.id)] = action;
   }
@@ -146,9 +146,12 @@ export async function removeActions(actionIds) {
  * these after an interrupted write.
  */
 export async function removeOrphanActions() {
+  // getKeys avoids deserializing every saved case just to inspect key names.
+  // Older Chrome versions lack it; defer this optional cleanup on those builds.
+  if (!chrome.storage.local.getKeys) return 0;
+  const keys = await chrome.storage.local.getKeys();
   const order = new Set(await readOrder());
-  const all = await chrome.storage.local.get(null);
-  const orphans = Object.keys(all).filter(
+  const orphans = keys.filter(
     key => key.startsWith(ACTION_PREFIX) && !order.has(key.slice(ACTION_PREFIX.length))
   );
   if (orphans.length > 0) await chrome.storage.local.remove(orphans);

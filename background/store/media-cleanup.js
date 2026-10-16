@@ -2,6 +2,7 @@ import { wait } from "../timing.js";
 import * as actionStore from "./actions.js";
 import * as caseStore from "./case-store.js";
 import { createSerialQueue } from "../queue.js";
+import { readDraftMediaKeys } from "./drafts.js";
 
 /**
  * Reference-aware screenshot cleanup with retry and persisted fallback work.
@@ -41,11 +42,13 @@ export function createMediaCleanupManager({ mediaStore }) {
    * either way: its steps belong to no case and outlive the deletion.
    */
   async function referencedKeys({ excludingCaseIds = null } = {}) {
-    const [workspaceActions, retained] = await Promise.all([
+    const [workspaceActions, retained, draftKeys] = await Promise.all([
       actionStore.readActions(),
-      caseStore.readReferencedScreenshotKeys({ excluding: excludingCaseIds })
+      caseStore.readReferencedScreenshotKeys({ excluding: excludingCaseIds }),
+      readDraftMediaKeys()
     ]);
     for (const key of screenshotKeys(workspaceActions)) retained.add(key);
+    for (const key of draftKeys) retained.add(key);
     return retained;
   }
 

@@ -1,4 +1,4 @@
-﻿# Chrome Web Store 上传与审核说明
+# Chrome Web Store 上传与审核说明
 
 > 适用版本：1.3.0
 > 核对日期：2026-10-10
@@ -34,7 +34,7 @@
 
 流程录制是一款面向网页流程梳理、AI 工作流理解和自动化复现的操作记录工具。它将用户录制的网页操作整理为清晰的 Markdown 流程说明，方便后续查看、复用或交给支持浏览器操作的 AI 工具处理。
 
-用户主动点击“开始录制”后，扩展仅跟踪当前页面及由该页面打开的子标签页或子窗口，记录点击、文本输入、选择、按键、悬停、拖拽和页面跳转，并为操作步骤保存页面截图。录制结果会整理为带页面句柄、元素语义、ARIA 可访问名称和必要 DOM 上下文的结构化步骤文档。
+用户主动点击“开始录制”后，扩展仅跟踪当前页面及由该页面打开的子标签页或子窗口，记录点击、文本输入、选择、按键、悬停、拖拽和页面跳转，并为操作步骤保存页面截图。录制结果会整理为带页面句柄、元素语义、浏览器计算的局部可访问性信息和必要 DOM 上下文的结构化步骤文档。
 
 主要功能：
 
@@ -48,7 +48,7 @@
 
 隐私说明：扩展会处理用户主动录制页面的网址、标题、页面元素信息、操作记录、表单输入值和页面截图。这些数据仅用于在用户设备上生成、保存、预览和导出流程文档，保存在当前 Chrome 用户配置文件的扩展专用存储中，不会发送到开发者或第三方服务器，不用于广告、画像或出售。请勿录制不希望保存在本机或导出文件中的敏感内容。
 
-录制开始时 Chrome 可能显示“正在调试此浏览器”的提示，这是扩展使用 Chrome DevTools Protocol 接收页面截图帧的正常行为。停止录制后，扩展会立即断开调试会话。
+录制开始时 Chrome 可能显示“正在调试此浏览器”的提示，这是扩展使用 Chrome DevTools Protocol 查询操作目标的局部可访问性信息，以及在启用截图时接收页面帧的正常行为。关闭截图时仍可能显示调试提示。停止录制后，扩展会立即断开调试会话。
 
 本项目已开源，采用 MIT 协议。你可以在 GitHub 查看源码、反馈问题或参与贡献：
 https://github.com/wat4me/workflow-recorder
@@ -57,7 +57,7 @@ https://github.com/wat4me/workflow-recorder
 
 Workflow Recorder is a browser interaction recorder for documenting web procedures, helping users understand workflows and reproduce them with AI or automation tools. It turns recorded web interactions into clear Markdown instructions that can be reviewed, reused, or provided to an AI tool with browser automation capabilities.
 
-Recording starts only after the user clicks “Start recording.” The extension then tracks the selected page and descendant tabs or windows opened from that page. It records clicks, text input, selections, key presses, hovers, drags, and navigation events, and saves step screenshots. The result is a structured workflow document containing page handles, element semantics, ARIA-accessible names, and limited DOM context.
+Recording starts only after the user clicks “Start recording.” The extension then tracks the selected page and descendant tabs or windows opened from that page. It records clicks, text input, selections, key presses, hovers, drags, and navigation events, and saves step screenshots. The result is a structured workflow document containing page handles, element semantics, local browser-computed accessibility context, and limited DOM context.
 
 Key features:
 
@@ -74,7 +74,7 @@ https://github.com/wat4me/workflow-recorder
 
 Privacy: the extension processes URLs, page titles, element information, user interactions, form input values, and screenshots from pages the user explicitly records. This information is used only to generate, store, preview, and export workflow documentation on the user's device. It is stored in extension-specific storage in the current Chrome profile and is not sent to the developer or any third-party server, sold, used for advertising, or used for profiling. Users should not record sensitive content they do not want stored locally or included in exports.
 
-Chrome may show a “debugging this browser” notification while recording. This is expected because the extension uses the Chrome DevTools Protocol only to receive page frames for step screenshots. The debugger session is detached when recording stops.
+Chrome may show a “debugging this browser” notification while recording. This is expected because the extension uses the Chrome DevTools Protocol to read local accessibility context for operation targets and, when screenshots are enabled, receive page frames. The debugger session is detached when recording stops.
 
 ### 建议分类
 
@@ -112,7 +112,7 @@ webNavigation：检测已纳入录制范围的页面完成导航，以便在新�
 
 sidePanel：在 Chrome 侧边栏中持续展示开始/停止按钮、录制步骤、可缩放截图预览以及当前用例的保存/导出操作。
 
-debugger：通过 Chrome DevTools Protocol 的 Page.startScreencast 接收用户正在录制页面的 JPEG 帧，为每个操作步骤生成截图。仅调用 Page.enable、Page.startScreencast、Page.screencastFrameAck 和 Page.stopScreencast；不读取网络流量、Cookie、控制台、完整无障碍树或其他调试数据。停止录制或页面关闭时立即 detach。
+debugger：通过 Chrome DevTools Protocol 接收页面截图帧，并读取操作目标的局部可访问性角色、名称、描述、值和状态。使用 Runtime.enable 跟踪执行上下文、Runtime.evaluate 获取扩展隔离世界中的临时元素引用、Runtime.callFunctionOn 在目标被忽略时读取最多三级父节点、DOM.describeNode 对应实际节点、Accessibility.getPartialAXTree 查询局部树，完成后释放远程对象引用；截图启用时使用 Page.startScreencast 等帧接口。不记录网络流量、Cookie、控制台或整页完整无障碍树。关闭截图后仍采集 AX；停止录制或页面关闭时 detach。
 
 主机权限 <all_urls>：扩展的单一用途是记录用户选择的任意网页流程，因此需要在用户主动开始录制后读取页面元素、监听页面交互并获取截图。实际记录范围限于用户选择的根页面及其打开的后代标签页/窗口，不处理未加入本次录制链路的其他标签页。Chrome 内部页面不可录制。
 
@@ -130,7 +130,7 @@ webNavigation: Detects navigation completion only in tabs already admitted to th
 
 sidePanel: Provides the persistent Chrome side panel that contains recording controls, recorded steps, zoomable screenshot previews, and current-case save/export actions.
 
-debugger: Uses the Chrome DevTools Protocol Page.startScreencast flow to receive JPEG frames from user-recorded pages and create step screenshots. It only uses Page.enable, Page.startScreencast, Page.screencastFrameAck, and Page.stopScreencast. It does not inspect network traffic, cookies, console data, or the full accessibility tree. The debugger is detached when recording stops or a recorded tab closes.
+debugger: Receives screenshot frames and reads local browser-computed accessibility roles, names, descriptions, values and states for operation targets. Runtime.enable tracks execution contexts; Runtime.evaluate resolves temporary references in the extension isolated world; Runtime.callFunctionOn reads up to three parent nodes when the target is ignored; DOM.describeNode identifies the exact node; Accessibility.getPartialAXTree reads local AX context. Remote object groups are released after queries. Page.startScreencast and related frame commands run only when screenshots are enabled. Network traffic, cookies, console data and full-page AX trees are not recorded. AX collection continues with screenshots off; sessions detach on stop or tab close.
 
 Host permission <all_urls>: The extension's single purpose is to record workflows on any website selected by the user. After explicit user initiation, it needs to inspect page elements, listen for interactions, and obtain screenshots on the selected root page and descendant pages it opens. Unrelated tabs are excluded, and Chrome internal pages cannot be recorded.
 
@@ -194,7 +194,7 @@ No account, paid subscription, or external service is required.
 
 1. After installation, open https://example.com/.
 2. Click the Workflow Recorder toolbar icon. The side panel opens.
-3. Click “Start recording.” Chrome may display a debugger notification; this is expected because Page.startScreencast is used for step screenshots.
+3. Click “Start recording.” Chrome may display a debugger notification; this is expected because local AX context is queried and Page.startScreencast is used when screenshots are enabled.
 4. Click the “More information...” link and wait for navigation.
 5. Return to the side panel. The open-page and click steps, with screenshots, should be visible.
 6. Click “Stop recording.” The debugger session is detached immediately.

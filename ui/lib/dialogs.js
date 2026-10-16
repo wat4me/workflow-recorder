@@ -178,10 +178,11 @@
       error.hidden = true;
       input.setAttribute("aria-describedby", error.id);
       input.closest("label").after(error);
-      input.addEventListener("input", () => {
+      const clearError = () => {
         error.hidden = true;
         input.removeAttribute("aria-invalid");
-      });
+      };
+      input.addEventListener("input", clearError);
 
       let picker = null;
       if (selection) {
@@ -190,6 +191,7 @@
         const caption = document.createElement("span");
         caption.textContent = selection.label;
         picker = globalThis.RecorderFolderPicker.create(selection);
+        picker.element.addEventListener("change", clearError);
         field.append(caption, picker.element);
         overlay.querySelector(".confirm-content").appendChild(field);
       }
@@ -201,7 +203,7 @@
       };
       const submit = () => {
         const text = input.value.trim();
-        const message = validate?.(text);
+        const message = validate?.(text, picker?.value);
         if (message) {
           error.textContent = message;
           error.hidden = false;

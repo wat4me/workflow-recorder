@@ -16,7 +16,7 @@
 
   // Bump when the disclosure text changes materially, so previously granted
   // consent no longer covers it and users are asked again.
-  const CONSENT_VERSION = 2;
+  const CONSENT_VERSION = 3;
   const CONSENT_KEY = "recordingConsentVersion";
 
   async function hasRecordingConsent() {
@@ -32,7 +32,7 @@
     return [
       t("consentItemUrls", [], "被录制页面的网址和标题"),
       t("consentItemActions", [], "点击、输入、选择、按键、悬停和拖拽操作"),
-      t("consentItemElements", [], "操作元素的标签、ARIA 语义和有限的 DOM 上下文"),
+      t("consentItemElements", [], "操作元素的标签、有限 DOM 上下文和浏览器计算的可访问性信息"),
       t("consentItemValues", [], "表单输入值"),
       t("consentItemScreenshots", [], "步骤截图（如已启用）")
     ];

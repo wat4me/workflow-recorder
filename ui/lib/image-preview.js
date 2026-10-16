@@ -26,6 +26,8 @@ import { iconSvg } from "./icons.js";
     image.alt = alt;
     // Native image dragging cancels the pointer stream used to pan the preview.
     image.draggable = false;
+    const highlight = globalThis.RecorderScreenshotMedia.createHighlightOverlay(image);
+    highlight.update(options.highlight);
 
     const stage = document.createElement("div");
     stage.className = "image-preview-stage";
@@ -93,6 +95,7 @@ import { iconSvg } from "./icons.js";
       drag = null;
       stage.classList.remove("is-dragging");
       image.hidden = true;
+      highlight.element.style.display = "none";
       image.removeAttribute("src");
       URL.revokeObjectURL(currentUrl);
       currentUrl = "";
@@ -108,11 +111,16 @@ import { iconSvg } from "./icons.js";
         return;
       }
       currentUrl = URL.createObjectURL(nextBlob);
+      highlight.update(item.highlight);
       image.src = currentUrl;
     };
 
     const render = () => {
       image.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+      Object.assign(highlight.element.style, {
+        width: `${image.naturalWidth}px`, height: `${image.naturalHeight}px`,
+        transform: image.style.transform
+      });
       zoomLabel.textContent = `${Math.round(scale * 100)}%`;
     };
     const fitImage = () => {
@@ -145,6 +153,7 @@ import { iconSvg } from "./icons.js";
     image.addEventListener("error", () => {
       if (closed || !image.hasAttribute("src")) return;
       image.hidden = true;
+      highlight.element.style.display = "none";
       message.textContent = t("missingScreenshot", [], "截图不存在或已被清理");
       message.hidden = false;
     });
@@ -216,7 +225,7 @@ import { iconSvg } from "./icons.js";
     });
     closeButton.addEventListener("click", close);
     document.addEventListener("keydown", onKeyDown);
-    stage.append(image, message);
+    stage.append(image, highlight.element, message);
     overlay.append(toolbar, stage, closeButton);
     document.body.appendChild(overlay);
     image.src = currentUrl;

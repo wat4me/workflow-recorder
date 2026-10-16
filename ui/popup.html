@@ -31,7 +31,7 @@
       </div>
 
       <div class="record-actions header-record-actions" aria-label="录制操作" data-i18n-aria-label="recordingActions">
-        <button id="record-btn" class="btn btn-primary start-state">
+        <button id="record-btn" class="btn btn-primary start-state" disabled>
           <span class="btn-icon">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M8 5v14l11-7z"></path>
@@ -75,6 +75,11 @@
     </header>
 
     <main class="app-main">
+      <div class="draft-toolbar" hidden>
+        <label for="recording-draft-select" data-i18n="currentDraft">当前草稿</label>
+        <select id="recording-draft-select" aria-label="当前草稿" data-i18n-aria-label="currentDraft"></select>
+        <span id="recording-draft-status"></span>
+      </div>
       <section class="case-actionbar" aria-label="用例操作" data-i18n-aria-label="caseActions">
         <div class="case-action-buttons">
           <button id="save-current-case-btn" class="btn btn-secondary" disabled>

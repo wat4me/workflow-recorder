@@ -14,11 +14,6 @@
 
   const { t } = globalThis.RecorderI18n;
 
-  // zipSync is synchronous and runs on the panel's thread. Level 6 shrinks the
-  // Markdown documents without the pause that level 9 costs on large exports;
-  // the JPEG screenshots are already compressed either way.
-  const ZIP_LEVEL = 6;
-
   function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -53,7 +48,7 @@
     return normalized;
   }
 
-  async function addWorkflowFolder(files, workflow) {
+  async function addWorkflowFolder(writer, workflow) {
     const actions = workflow.actions || [];
     if (actions.length === 0) return;
 
@@ -62,7 +57,6 @@
     const doc = globalThis.StepDocGenerator
       ? globalThis.StepDocGenerator.generate(actions)
       : "No steps recorded yet.";
-    files[`${folder}${baseName}.md`] = globalThis.fflate.strToU8(doc);
 
     const screenshotLines = [];
     for (let index = 0; index < actions.length; index++) {
@@ -70,7 +64,7 @@
       const type = String(action.type || "step").replace(/[^a-z0-9_-]/gi, "-");
       const stepStem = `step-${String(index + 1).padStart(3, "0")}-${type}`;
       const frames = [
-        { key: action.screenshotBeforeKey, label: "before", suffix: "before" },
+        { key: action.screenshotBeforeKey, label: "before", suffix: "before", highlight: action.screenshotBeforeHighlight },
         { key: action.screenshotKey, label: "after", suffix: "after" }
       ];
 
@@ -80,52 +74,54 @@
         if (!screenshot) continue;
 
         const relativeFilename = `screenshots/${stepStem}-${frame.suffix}.jpg`;
-        files[`${folder}${relativeFilename}`] = new Uint8Array(await screenshot.arrayBuffer());
+        const rendered = frame.highlight
+          ? await globalThis.RecorderScreenshotMedia.addTargetHighlight(screenshot, frame.highlight)
+          : screenshot;
+        await writer.add(`${folder}${relativeFilename}`, rendered);
         screenshotLines.push(`- Step ${index + 1} ${frame.label}: ${relativeFilename}`);
       }
     }
 
     // Appended only once the filenames are known, so the index cannot list a
     // screenshot that failed to read.
-    if (screenshotLines.length > 0) {
-      files[`${folder}${baseName}.md`] = globalThis.fflate.strToU8(
-        `${doc.trimEnd()}\n\n## Step screenshots\n\n${screenshotLines.join("\n")}\n`
-      );
-    }
+    const document = screenshotLines.length > 0
+      ? `${doc.trimEnd()}\n\n## Step screenshots\n\n${screenshotLines.join("\n")}\n` : doc;
+    await writer.add(`${folder}${baseName}.md`, globalThis.fflate.strToU8(document), true);
   }
 
   async function exportWorkflow(actions, exportName) {
     if (!actions || actions.length === 0) return;
 
     const baseName = sanitizeExportName(exportName);
-    const files = {};
-    await addWorkflowFolder(files, { name: baseName, actions });
-
-    const archive = globalThis.fflate.zipSync(files, { level: ZIP_LEVEL });
-    triggerDownload(new Blob([archive], { type: "application/zip" }), `${baseName}.zip`);
+    const writer = globalThis.RecorderArchiveStream.createWriter();
+    try {
+      await addWorkflowFolder(writer, { name: baseName, actions });
+      triggerDownload(writer.finish(), `${baseName}.zip`);
+    } catch (error) { writer.abort(); throw error; }
   }
 
   async function exportWorkflowBatch(workflows, archiveName = t("batchCaseArchive", [], "批量用例")) {
     const validWorkflows = (workflows || []).filter(workflow => workflow?.actions?.length);
     if (validWorkflows.length === 0) return;
 
-    const files = {};
+    const writer = globalThis.RecorderArchiveStream.createWriter();
     // Two cases may carry the same name; suffix duplicates so neither folder
     // silently overwrites the other inside the archive.
     const usedNames = new Map();
-    for (const workflow of validWorkflows) {
-      const rawName = sanitizeExportName(workflow.name);
-      const count = (usedNames.get(rawName) || 0) + 1;
-      usedNames.set(rawName, count);
-      const uniqueName = count === 1 ? rawName : `${rawName}-${count}`;
-      await addWorkflowFolder(files, { ...workflow, name: uniqueName });
-    }
+    try {
+      for (const workflow of validWorkflows) {
+        const rawName = sanitizeExportName(workflow.name);
+        const count = (usedNames.get(rawName) || 0) + 1;
+        usedNames.set(rawName, count);
+        const uniqueName = count === 1 ? rawName : `${rawName}-${count}`;
+        await addWorkflowFolder(writer, { ...workflow, name: uniqueName });
+      }
 
-    const archive = globalThis.fflate.zipSync(files, { level: ZIP_LEVEL });
-    triggerDownload(
-      new Blob([archive], { type: "application/zip" }),
-      `${sanitizeExportName(archiveName)}.zip`
-    );
+      triggerDownload(
+        writer.finish(),
+        `${sanitizeExportName(archiveName)}.zip`
+      );
+    } catch (error) { writer.abort(); throw error; }
   }
 
   globalThis.RecorderExport = {

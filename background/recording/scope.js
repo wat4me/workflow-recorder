@@ -197,10 +197,8 @@ export function createRecordingScope({ screencast }) {
     await injectRecordingScripts(tab.id, false).catch(error => {
       console.warn(`[Background] Child tab ${tab.id} will be retried after navigation:`, error.message);
     });
-    // A child tab inherits the session's capture policy: a recording that wants no
-    // screenshots must not attach the debugger to the windows it opens either.
+    // Share the session transport for AX; image streaming still follows the plan.
     const capturePlan = await readRecordingCapturePlan();
-    if (!capturePlan.screenshots) return;
     screencast.start(tab.id, capturePlan).catch(error => {
       console.warn(`[Screencast] Failed to start for child tab ${tab.id}:`, error.message);
     });

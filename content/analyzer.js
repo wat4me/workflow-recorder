@@ -7,6 +7,20 @@
 (function () {
   if (window.SemanticElementAnalyzer) return;
 
+  // Short-lived exact node references, isolated from page scripts. Never persisted.
+  const axTargets = new Map();
+  window.__workflowAXTargets = axTargets;
+  let axCounter = 0;
+  let axCleanup = null;
+  function retainAXTarget(element) {
+    if (!globalThis.chrome?.runtime?.id) return undefined;
+    const token = `ax_${Date.now()}_${++axCounter}_${Math.random().toString(36).slice(2)}`;
+    if (axTargets.size >= 64) axTargets.delete(axTargets.keys().next().value);
+    axTargets.set(token, element);
+    if (!axCleanup) axCleanup = setTimeout(() => { axTargets.clear(); axCleanup = null; }, 5000);
+    return token;
+  }
+
   const SemanticElementAnalyzer = {
     /**
      * Main function to capture comprehensive element context.
@@ -17,10 +31,11 @@
       if (!element) return null;
 
       return {
+        _axRef: retainAXTarget(element),
         // Core identification
         tagName: element.tagName.toLowerCase(),
         id: element.id || null,
-        className: element.className || null,
+        className: element.getAttribute("class") || null,
         name: element.getAttribute("name") || null,
         type: element.getAttribute("type") || null,
         role: this.computeRole(element),
@@ -52,6 +67,7 @@
         frameInfo: this.getFrameInfo(),
 
         // Raw snapshot (sanitized: SVG/style stripped so text survives the cap)
+        openTag: this.renderOpenTag(element),
         outerHTML: this.sanitizeHTML(element.outerHTML, 800)
       };
     },
@@ -274,7 +290,7 @@
       return {
         tagName: el.tagName.toLowerCase(),
         id: el.id || null,
-        className: (el.className || "").toString().substring(0, 100),
+        className: (el.getAttribute("class") || "").substring(0, 100),
         textPreview: this.cleanText(this.getElementText(el)).substring(0, 100)
       };
     },
@@ -313,9 +329,17 @@
     renderOpenTag(el) {
       const tag = el.tagName.toLowerCase();
       const wanted = ["id", "class", "name", "type", "placeholder", "title", "href", "src", "role"];
+      const priority = ["id", "data-testid", "data-test-id", "data-test", "data-qa", "data-cy",
+        "name", "role", "aria-label", "aria-labelledby", "aria-controls", "type", "href", "class", "placeholder", "title", "src"];
+      const rank = name => {
+        const index = priority.indexOf(name.toLowerCase());
+        return index < 0 ? priority.length : index;
+      };
       const parts = [];
 
-      for (const attr of el.attributes || []) {
+      // Attribute insertion order is presentation detail, not locator priority.
+      const attributes = Array.from(el.attributes || []).sort((a, b) => rank(a.name) - rank(b.name));
+      for (const attr of attributes) {
         const n = attr.name.toLowerCase();
         const keep = wanted.includes(n) || n.startsWith("data-") || n.startsWith("aria-");
         if (!keep || !attr.value.trim()) continue;

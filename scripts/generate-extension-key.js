@@ -1,10 +1,12 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const localDirectory = path.join(root, ".local");
-const privateKeyPath = path.join(localDirectory, "extension-key.pem");
+const keyDirectory = path.join(os.homedir(), ".extension-keys", "workflow-recorder");
+const privateKeyPath = path.join(keyDirectory, "extension-key.pem");
 const identityPath = path.join(localDirectory, "extension-identity.json");
 const manifestPath = path.join(root, "manifest.json");
 
@@ -28,7 +30,7 @@ function loadOrCreatePrivateKey() {
     );
   }
 
-  fs.mkdirSync(localDirectory, { recursive: true });
+  fs.mkdirSync(keyDirectory, { recursive: true });
   const { privateKey } = crypto.generateKeyPairSync("rsa", {
     modulusLength: 2048,
     publicExponent: 0x10001
@@ -44,8 +46,11 @@ const publicKeyDer = crypto.createPublicKey(privateKey).export({ type: "spki", f
 const manifestKey = publicKeyDer.toString("base64");
 const id = extensionId(publicKeyDer);
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-manifest.key = manifestKey;
-fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+if (manifest.key !== manifestKey) {
+  manifest.key = manifestKey;
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+fs.mkdirSync(localDirectory, { recursive: true });
 fs.writeFileSync(identityPath, `${JSON.stringify({
   extensionId: id,
   manifestKey,

@@ -37,6 +37,7 @@
         row.setAttribute("aria-checked", String(active));
         row.tabIndex = active ? 0 : -1;
       }
+      element.dispatchEvent(new Event("change", { bubbles: true }));
     }
     list.addEventListener("keydown", event => {
       const index = rows.indexOf(document.activeElement);

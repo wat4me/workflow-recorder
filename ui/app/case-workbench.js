@@ -2,6 +2,7 @@
 import { attachFolders } from "./case-folders.js";
 import { iconSvg } from "../lib/icons.js";
 import { applyFolderColor } from "../lib/folder-colors.js";
+import { nameKey } from "../../shared/case-names.js";
 
 if (!globalThis.RecorderCaseWorkbench) {
   function create(options) {
@@ -143,7 +144,10 @@ if (!globalThis.RecorderCaseWorkbench) {
             title: t("renameCase", [], "重命名用例"), label: t("caseName", [], "用例名称"),
             value: caseRecord.name, maxLength: 120, confirmText: t("save", [], "保存"),
             validate: name => !name || name.length > 120
-              ? t("errorInvalidCaseName", [], "请输入 1–120 个字符的用例名称") : ""
+              ? t("errorInvalidCaseName", [], "请输入 1–120 个字符的用例名称")
+              : name !== caseRecord.name && ctx.cases.some(item => item.id !== caseRecord.id
+                && (item.folderId || null) === (caseRecord.folderId || null) && nameKey(item.name) === nameKey(name))
+                ? t("errorCaseNameExists", [], "当前文件夹已存在同名用例，请换一个名称") : ""
           });
           if (name === null || name === caseRecord.name) return;
           const response = await sendRuntimeMessage({ action: MESSAGE.renameCase, caseId: caseRecord.id, name });
@@ -228,7 +232,8 @@ if (!globalThis.RecorderCaseWorkbench) {
         return false;
       }
       if (clearSelection) ctx.selectedIds.clear();
-      notify(t("casesMoved", [response.movedCount], `已移动 ${response.movedCount} 个用例`));
+      notify(t("casesMoved", [response.movedCount], `已移动 ${response.movedCount} 个用例`)
+        + (response.renamedCount ? t("duplicateNamesAdjusted", [response.renamedCount], `；${response.renamedCount} 个重名用例已自动添加编号`) : ""));
       await refresh();
       return true;
     }
@@ -482,7 +487,8 @@ if (!globalThis.RecorderCaseWorkbench) {
       importButton.disabled = true;
       try {
         const result = await importCasePackage(file);
-        notify(t("casePackageImported", [result.importedCount], `已导入 ${result.importedCount} 个用例`));
+        notify(t("casePackageImported", [result.importedCount], `已导入 ${result.importedCount} 个用例`)
+          + (result.renamedCount ? t("duplicateNamesAdjusted", [result.renamedCount], `；${result.renamedCount} 个重名用例已自动添加编号`) : ""));
         await refresh();
       } catch (error) {
         reportError(error.message || t("importCasesFailed", [], "导入用例失败"));

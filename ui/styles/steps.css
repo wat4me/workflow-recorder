@@ -120,6 +120,7 @@
 
 /* ── Step Card ── */
 .step-card {
+  flex-shrink: 0;
   --step-header-height: 24px;
   --step-index-size: 18px;
   display: flex;
@@ -174,7 +175,7 @@
  * The numbers stay. A line is a second way of showing order, not the only one, so
  * the sequence survives a screen reader and a high-contrast mode that drops it.
  */
-.step-card:not(:last-child)::after {
+.step-card:not(.is-last-step)::after {
   content: "";
   position: absolute;
   left: var(--step-connector-left);
@@ -205,7 +206,7 @@
 /* Where the flow currently ends. During a recording this is the step just taken,
    which is the one the user is looking for. Scoped to the recording state: on a
    saved case the filled circle reads as "selected", which it is not. */
-.steps-container.is-recording .step-card:last-child .step-index {
+.steps-container.is-recording .step-card.is-last-step .step-index {
   background: var(--accent-color);
   color: #fff;
 }
@@ -464,6 +465,44 @@
   max-width: 100%;
 }
 
+.step-media-row[hidden],
+.step-screenshots-toggle[hidden] {
+  display: none;
+}
+
+.step-screenshots-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.step-screenshots-toggle::before {
+  content: "›";
+  font-size: 14px;
+  line-height: 1;
+}
+
+.step-screenshots-toggle[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
+.step-screenshots-toggle:hover {
+  color: var(--accent-color);
+}
+
+.step-screenshots-toggle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
 .step-media-slot {
   display: flex;
   flex-direction: column;
@@ -510,9 +549,34 @@
   height: 54px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  object-fit: cover;
+  object-fit: contain;
   object-position: top left;
   background: var(--bg-tertiary);
+}
+
+.screenshot-surface {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.screenshot-surface .step-screenshot { border: 0; }
+
+.screenshot-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+
+.step-virtual-spacer {
+  flex: 0 0 auto;
+  pointer-events: none;
 }
 
 .image-preview-overlay {
@@ -992,3 +1056,23 @@
   cursor: not-allowed;
   opacity: 0.6;
 }
+.draft-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.draft-toolbar[hidden] { display: none; }
+.draft-toolbar select {
+  min-width: 0;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: inherit;
+  font: inherit;
+}
+.draft-toolbar > span { grid-column: 1 / -1; color: var(--text-secondary, #64748b); }

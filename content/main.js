@@ -34,9 +34,9 @@
   }
 
   let isRecording = false;
+  const pendingActions = new Set();
   let hasRecordedNavigation = false;
   const pageStability = globalThis.RecorderPageStability.create();
-  const pageFit = globalThis.RecorderPageFit.create();
   const framePrimer = globalThis.RecorderScreencastFramePrimer.create();
   const dragRecorder = globalThis.RecorderDragRecorder.create({
     isRecording: () => isRecording,
@@ -47,7 +47,6 @@
 
   // Hover tracking states
   let lastHoveredElement = null;
-  let lastHoveredElementRecorded = null;
 
   // Initialize session state
   chrome.storage.local.get(["isRecording"], result => {
@@ -131,17 +130,17 @@
       isRecording = false;
       inputRecorder.reset();
       lastHoveredElement = null;
-      lastHoveredElementRecorded = null;
       closeKeepalive();
       // Scoped to the session, not to the document: the next fresh recording
       // started on this same page needs its own opening step.
       hasRecordedNavigation = false;
       framePrimer.dispose();
       removeEventListeners();
-      sendResponse({ status: "stopped" });
-    } else if (request.action === MESSAGE.setPageFit && window.top === window) {
-      pageFit.setEnabled(!!request.enabled);
-      sendResponse({ status: request.enabled ? "fitting" : "restored" });
+      // sendMessage delivery can arrive after this stop handler's reply. Wait
+      // for committed actions (especially the flushed input) before allowing
+      // the worker to drain/replace this workspace with another tab's draft.
+      Promise.allSettled([...pendingActions]).then(() => sendResponse({ status: "stopped" }));
+      return true;
     } else if (request.action === MESSAGE.waitForPageStable && window.top === window) {
       pageStability.waitForPageStable(request.options).then(sendResponse);
       return true;
@@ -259,108 +258,27 @@
     };
 
     console.log("[Workflow Recorder] Sending action to background:", payload.type);
-    chrome.runtime.sendMessage({
-      action: messageAction,
-      payload: payload,
-      ...messageDetails
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error("[Workflow Recorder] sendMessage error:", chrome.runtime.lastError.message);
-      } else if (response && !response.success) {
-        console.error("[Workflow Recorder] Background returned error:", response.error);
-      }
-    });
-  }
-
-  /**
-   * Automatically walk up DOM to locate hover/dropdown trigger siblings if clicked inside dynamic dropdown/popovers
-   */
-  function detectAndPrependHover(clickedElement) {
-    if (!clickedElement) return;
-
-    let current = clickedElement;
-    let menuContainer = null;
-
-    // Traverse up to find a container representing a hover/dropdown menu
-    while (current && current !== document.body && current.parentElement) {
-      const className = (current.className || "").toString().toLowerCase();
-      const id = (current.id || "").toString().toLowerCase();
-      const role = (current.getAttribute("role") || "").toLowerCase();
-
-      if (
-        className.includes("dropdown-menu") ||
-        className.includes("dropdown-content") ||
-        className.includes("popover") ||
-        className.includes("hover-menu") ||
-        className.includes("submenu") ||
-        className.includes("menu-panel") ||
-        className.includes("popup-menu") ||
-        className.includes("el-dropdown-menu") ||
-        className.includes("ant-dropdown") ||
-        className.includes("select-dropdown") ||
-        role === "menu" ||
-        role === "listbox"
-      ) {
-        menuContainer = current;
-        break;
-      }
-      current = current.parentElement;
-    }
-
-    if (!menuContainer) return;
-
-    // Now try to find the trigger element that opens this menu
-    let triggerElement = null;
-
-    // 1. Check aria-controls/aria-owns
-    if (menuContainer.id) {
-      triggerElement = document.querySelector(
-        `[aria-controls="${menuContainer.id}"], [aria-owns="${menuContainer.id}"]`
-      );
-    }
-
-    // 2. Check previous sibling of the menu container
-    if (!triggerElement && menuContainer.previousElementSibling) {
-      triggerElement = getInteractableTarget(menuContainer.previousElementSibling) || menuContainer.previousElementSibling;
-    }
-
-    // 3. Check siblings inside parent element
-    if (!triggerElement && menuContainer.parentElement) {
-      const parent = menuContainer.parentElement;
-      const siblings = Array.from(parent.children);
-      for (const sib of siblings) {
-        if (sib === menuContainer) continue;
-        const sibTag = sib.tagName.toUpperCase();
-        const sibRole = sib.getAttribute("role");
-        const sibClass = (sib.className || "").toString().toLowerCase();
-        if (
-          sibTag === "BUTTON" ||
-          sibTag === "A" ||
-          sibRole === "button" ||
-          sibClass.includes("toggle") ||
-          sibClass.includes("trigger") ||
-          sib.getAttribute("aria-haspopup") === "true"
-        ) {
-          triggerElement = sib;
-          break;
+    let finishDelivery;
+    const delivery = new Promise(resolve => { finishDelivery = resolve; });
+    pendingActions.add(delivery);
+    try {
+      chrome.runtime.sendMessage({
+        action: messageAction,
+        payload: payload,
+        ...messageDetails
+      }, (response) => {
+        pendingActions.delete(delivery);
+        finishDelivery();
+        if (chrome.runtime.lastError) {
+          console.error("[Workflow Recorder] sendMessage error:", chrome.runtime.lastError.message);
+        } else if (response && !response.success) {
+          console.error("[Workflow Recorder] Background returned error:", response.error);
         }
-      }
-    }
-
-    // If we found a trigger, verify it is different from the clicked element
-    if (triggerElement && triggerElement !== clickedElement) {
-      // Avoid double-hovering the same trigger if we just hovered it
-      if (lastHoveredElementRecorded === triggerElement) return;
-
-      if (window.SemanticElementAnalyzer) {
-        const analysis = window.SemanticElementAnalyzer.analyze(triggerElement);
-        recordAction({
-          type: "hover",
-          target: analysis
-        });
-        lastHoveredElementRecorded = triggerElement;
-        console.log("[Workflow Recorder] Auto-prepended hover step for:", triggerElement);
-      }
+      });
+    } catch (error) {
+      pendingActions.delete(delivery);
+      finishDelivery();
+      console.error("[Workflow Recorder] sendMessage error:", error.message);
     }
   }
 
@@ -399,9 +317,6 @@
       return;
     }
 
-    // Trigger auto-hover detection on dynamic popovers/dropdowns before recording click
-    detectAndPrependHover(target);
-
     // Analyze target
     if (window.SemanticElementAnalyzer) {
       const analysis = window.SemanticElementAnalyzer.analyze(target);
@@ -409,6 +324,17 @@
       recordAction({
         type: "click",
         target: analysis,
+        // Keep the event hit distinct from the normalized interaction target.
+        ...(rawTarget !== target ? { hitTarget: {
+          tagName: rawTarget.tagName.toLowerCase(),
+          id: rawTarget.id || null,
+          className: rawTarget.getAttribute("class") || null,
+          ancestorDistance: (() => {
+            let distance = 0;
+            for (let node = rawTarget; node && node !== target; node = node.parentElement) distance++;
+            return distance;
+          })()
+        } } : {}),
         pointer: makeTopViewportPointer(event, target, analysis.boundingBox)
       }, MESSAGE.logClickAction, {
         effectBaseline: pageStability.getEffectVersion(),
@@ -456,7 +382,6 @@
         type: "hover",
         target: window.SemanticElementAnalyzer.analyze(interactableHoverTarget)
       });
-      lastHoveredElementRecorded = interactableHoverTarget;
       console.log("[Workflow Recorder] Manually recorded hover step for:", interactableHoverTarget);
       return;
     }

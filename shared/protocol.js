@@ -15,6 +15,8 @@
     setSidePanelLayout: "setSidePanelLayout",
     prepareSidePanelForTab: "prepareSidePanelForTab",
     getActions: "getActions",
+    getDraftState: "getDraftState",
+    selectDraft: "selectDraft",
     getSchemaState: "getSchemaState",
     getLocaleMessages: "getLocaleMessages",
     manualScreenshot: "manualScreenshot",
@@ -73,7 +75,7 @@
     notRecording: "not-recording",
     /** The browser marked the event as produced by page script, not by a person. */
     untrustedEvent: "untrusted-event",
-    /** Nothing clickable was found, or the element carries no interaction signal. */
+    /** No element was hit, or the target is a body/html page root. */
     meaninglessTarget: "meaningless-target",
     /** An input or editable field: typing records its committed value instead. */
     editableTarget: "editable-target",

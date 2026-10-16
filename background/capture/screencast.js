@@ -7,6 +7,7 @@ const SCREENCAST_JPEG_QUALITY = 75;
 /** CDP screencast sessions and latest-frame cache for recorded tabs. */
 export function createScreencastManager() {
   const sessions = new Map();
+  const contexts = new Map();
   const starts = new Map();
   const waiters = new Map();
 
@@ -25,22 +26,27 @@ export function createScreencastManager() {
     const promise = (async () => {
       try {
         await chrome.debugger.attach(target(tabId), "1.3");
+        contexts.set(tabId, new Set());
+        await send(tabId, "Runtime.enable");
         await send(tabId, "Page.enable");
-        await send(tabId, "Page.startScreencast", {
-          format: "jpeg",
-          // No scaling ceiling: each tab is captured at its current native viewport
-          // resolution and naturally follows later window resizes. Chrome applies a
-          // ceiling as a downscale and never a stretch, so passing one would be
-          // safe -- there is simply no longer any reason to.
-          quality: SCREENCAST_JPEG_QUALITY,
-          // Fewer frames to encode, acknowledge and decode. Memory is flat across
-          // 2/4/6, so this is a CPU and CDP-traffic setting, not a memory one, and
-          // it is deliberately not exposed to the user.
-          everyNthFrame: Number.isInteger(plan.frameStride) ? plan.frameStride : 2
-        });
-        sessions.set(tabId, { frame: null });
+        if (plan.screenshots !== false) {
+          await send(tabId, "Page.startScreencast", {
+            format: "jpeg",
+            // No scaling ceiling: each tab is captured at its current native viewport
+            // resolution and naturally follows later window resizes. Chrome applies a
+            // ceiling as a downscale and never a stretch, so passing one would be
+            // safe -- there is simply no longer any reason to.
+            quality: SCREENCAST_JPEG_QUALITY,
+            // Fewer frames to encode, acknowledge and decode. Memory is flat across
+            // 2/4/6, so this is a CPU and CDP-traffic setting, not a memory one, and
+            // it is deliberately not exposed to the user.
+            everyNthFrame: Number.isInteger(plan.frameStride) ? plan.frameStride : 2
+          });
+        }
+        sessions.set(tabId, { frame: null, screenshots: plan.screenshots !== false });
       } catch (error) {
         sessions.delete(tabId);
+        contexts.delete(tabId);
         try {
           await chrome.debugger.detach(target(tabId));
         } catch (detachError) {}
@@ -60,10 +66,12 @@ export function createScreencastManager() {
       } catch (error) {}
     }
     if (!sessions.has(tabId)) return;
+    const session = sessions.get(tabId);
     sessions.delete(tabId);
+    contexts.delete(tabId);
     rejectWaiters(tabId, new Error("Screencast stopped"));
     try {
-      await send(tabId, "Page.stopScreencast");
+      if (session.screenshots) await send(tabId, "Page.stopScreencast");
     } catch (error) {}
     try {
       await chrome.debugger.detach(target(tabId));
@@ -127,7 +135,14 @@ export function createScreencastManager() {
   }
 
   chrome.debugger.onEvent.addListener((source, method, params) => {
-    if (method !== "Page.screencastFrame" || !Number.isInteger(source.tabId)) return;
+    if (!Number.isInteger(source.tabId)) return;
+    const worlds = contexts.get(source.tabId);
+    if (method === "Runtime.executionContextCreated" && params.context?.auxData?.isDefault === false) {
+      worlds?.add(params.context.id);
+    }
+    if (method === "Runtime.executionContextDestroyed") worlds?.delete(params.executionContextId);
+    if (method === "Runtime.executionContextsCleared") worlds?.clear();
+    if (method !== "Page.screencastFrame") return;
     const tabId = source.tabId;
     // ACK immediately so Chrome can continue pushing frames without backpressure.
     send(tabId, "Page.screencastFrameAck", { sessionId: params.sessionId }).catch(error => {
@@ -149,10 +164,13 @@ export function createScreencastManager() {
   chrome.debugger.onDetach.addListener((source, reason) => {
     if (!Number.isInteger(source.tabId)) return;
     sessions.delete(source.tabId);
+    contexts.delete(source.tabId);
     rejectWaiters(source.tabId, new Error(`Debugger detached: ${reason}`));
   });
 
   return {
+    send,
+    contexts: tabId => [...(contexts.get(tabId) || [])],
     getFrame,
     getLatestFrame,
     has: tabId => sessions.has(tabId) || starts.has(tabId),

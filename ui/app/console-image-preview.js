@@ -9,6 +9,8 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
   const previewPreviousButton = document.getElementById("console-prev-image");
   const previewNextButton = document.getElementById("console-next-image");
   const PREVIEW_SEQUENCE_KEY = "recorderImagePreviewSequence";
+  const highlight = globalThis.RecorderScreenshotMedia.createHighlightOverlay(previewImage);
+  previewStage.append(highlight.element);
 
   let previewObjectUrl = "";
   let previewScale = 1;
@@ -21,6 +23,10 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
 
   function renderPreviewTransform() {
     previewImage.style.transform = `translate(${previewX}px, ${previewY}px) scale(${previewScale})`;
+    Object.assign(highlight.element.style, {
+      width: `${previewImage.naturalWidth}px`, height: `${previewImage.naturalHeight}px`,
+      transform: previewImage.style.transform
+    });
     previewZoomLabel.textContent = `${Math.round(previewScale * 100)}%`;
   }
 
@@ -58,6 +64,10 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
     previewLoading.textContent = t("loadingScreenshot", [], "正在读取截图…");
     previewLoading.style.display = "flex";
     previewImage.style.display = "none";
+    highlight.element.style.display = "none";
+    previewImage.removeAttribute("src");
+    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl = "";
 
     const blob = await getBlob(screenshotKey);
     if (loadId !== previewLoadId) return;
@@ -65,8 +75,8 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
       previewLoading.textContent = t("missingScreenshot", [], "截图不存在或已被清理");
       return;
     }
-    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
     previewObjectUrl = URL.createObjectURL(blob);
+    highlight.update(previewSequence.find(item => item.key === screenshotKey)?.highlight);
     previewImage.onload = () => {
       previewLoading.style.display = "none";
       previewImage.style.display = "block";
@@ -100,7 +110,8 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
     const response = await sendRuntimeMessage({ action: MESSAGE.getActions }).catch(() => null);
     const fallback = (response?.actions || []).flatMap((action, index) => [
       action.screenshotBeforeKey
-        ? { key: action.screenshotBeforeKey, alt: window.StepDocGenerator.screenshotTitle(action, index, "before") }
+        ? { key: action.screenshotBeforeKey, alt: window.StepDocGenerator.screenshotTitle(action, index, "before"),
+            highlight: action.screenshotBeforeHighlight }
         : null,
       action.screenshotKey
         ? { key: action.screenshotKey, alt: window.StepDocGenerator.screenshotTitle(action, index, "after") }
@@ -128,6 +139,7 @@ export function createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESS
     ++previewLoadId;
     previewImage.onload = null;
     previewImage.removeAttribute("src");
+    highlight.element.style.display = "none";
     if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
     previewObjectUrl = null;
   }

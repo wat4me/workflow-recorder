@@ -90,3 +90,14 @@ test("sanitizeHTML truncates very long content and keeps null for empty input", 
   assert.ok(out.length <= 103);
   assert.match(out, /\.\.\.$/);
 });
+
+test("ancestor DOM context preserves late test hooks ahead of presentation attributes", () => {
+  const element = fakeElement({ tag: "BUTTON", attrs: {
+    class: "one two three four five", title: "Details", href: "/old", src: "/icon", type: "button", placeholder: "hint",
+    "data-render-count": "42", "data-testid": "branch-toggle", "aria-label": "Choose branch"
+  } });
+  const tag = loadAnalyzer().renderOpenTag(element);
+  assert.match(tag, /data-testid="branch-toggle"/);
+  assert.match(tag, /aria-label="Choose branch"/);
+  assert.ok(tag.endsWith(">"));
+});

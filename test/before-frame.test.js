@@ -97,3 +97,14 @@ test("a failed before-frame write publishes a valid single-frame step", async ()
   assert.equal("screenshotBeforeKey" in storage.data["action:step_1"], false);
   assert.equal(storage.data["action:step_1"].screenshotStatus, "pending");
 });
+
+test("raw before frames publish their own geometry, independent of later target changes", async () => {
+  const { log, storage } = await setup(async key => key);
+  const box = { coordinateSpace: "top-viewport", x: 10, y: 20, width: 30, height: 40,
+    viewportWidth: 1920, viewportHeight: 1080 };
+  await log.log({ id: "raw", type: "click", target: { boundingBox: box } },
+    { id: 1, windowId: 1, url: "https://example.test/" });
+  assert.deepEqual(storage.data["action:raw"].screenshotBeforeHighlight, box);
+  box.x = 999;
+  assert.equal(storage.data["action:raw"].screenshotBeforeHighlight.x, 10);
+});

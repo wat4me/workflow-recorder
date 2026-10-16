@@ -459,7 +459,7 @@ test("recording disclosure accurately includes all form input values", () => {
   const zh = JSON.parse(read("_locales", "zh_CN", "messages.json"));
   const en = JSON.parse(read("_locales", "en", "messages.json"));
 
-  assert.match(consent, /CONSENT_VERSION = 2/);
+  assert.match(consent, /CONSENT_VERSION = 3/);
   assert.equal(zh.consentItemValues.message, "表单输入值");
   assert.equal(en.consentItemValues.message, "Form input values");
   assert.doesNotMatch(consent, /密码输入框除外|password fields/i);

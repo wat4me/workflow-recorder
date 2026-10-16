@@ -11,6 +11,7 @@
  * silently discard the user's open steps.
  */
 import * as caseStore from "./case-store.js";
+import { nameKey, reserveCaseName } from "../../shared/case-names.js";
 import { isReadableCase } from "./schema.js";
 import * as actionStore from "./actions.js";
 import { ORIGIN_KEY, lineageFor, originFor, readOrigin, tombstone } from "./workspace-origin.js";
@@ -106,9 +107,11 @@ export function createCaseManager({
     }
 
     const origin = await readOrigin();
+    const usedNames = new Set((await caseStore.readIndex())
+      .filter(entry => (entry.folderId || null) === folderId).map(entry => nameKey(entry.name)));
     const caseRecord = {
       id: generateCaseId(),
-      name: name || defaultCaseName(),
+      name: reserveCaseName(name || defaultCaseName(), usedNames),
       folderId,
       createdAt: Date.now(),
       actions: structuredClone(actions),
@@ -291,7 +294,9 @@ export function createCaseManager({
       return { success: false, error: t("errorInvalidCasePackage", [], "用例包内容无效") };
     }
 
-    const existingIds = new Set((await caseStore.readIndex()).map(entry => entry.id));
+    const existingIndex = await caseStore.readIndex();
+    const existingIds = new Set(existingIndex.map(entry => entry.id));
+    const usedNames = new Set(existingIndex.filter(entry => !entry.folderId).map(entry => nameKey(entry.name)));
     const incomingIds = new Set();
     let totalSteps = 0;
     for (const record of records) {
@@ -318,7 +323,7 @@ export function createCaseManager({
       const parentId = record.lineage?.parentCaseId;
       return {
         id: record.id,
-        name: record.name.trim(),
+        name: reserveCaseName(record.name, usedNames),
         createdAt: Number(record.createdAt) || Date.now(),
         actions: structuredClone(record.actions),
         pages: structuredClone(record.pages),
@@ -326,7 +331,8 @@ export function createCaseManager({
       };
     });
     const entries = await caseStore.writeCases(validRecords);
-    return { success: true, importedCount: entries.length, cases: entries };
+    return { success: true, importedCount: entries.length, cases: entries,
+      renamedCount: validRecords.filter((record, index) => record.name !== records[index].name.trim()).length };
   }
 
   async function listFolders() {
@@ -467,6 +473,10 @@ export function createCaseManager({
     const index = await caseStore.readIndex();
     const entry = index.find(item => item.id === caseId);
     if (!entry) return { success: false, error: t("errorCaseNotFound", [], "用例不存在") };
+    if (name.trim() !== entry.name && index.some(item => item.id !== caseId
+      && (item.folderId || null) === (entry.folderId || null) && nameKey(item.name) === nameKey(name))) {
+      return { success: false, error: t("errorCaseNameExists", [], "当前文件夹已存在同名用例，请换一个名称") };
+    }
     const renamed = { ...entry, name: name.trim() };
     const origin = await readOrigin();
     await chrome.storage.local.set({
@@ -495,8 +505,22 @@ export function createCaseManager({
       return { success: false, error: t("errorCaseNotFound", [], "用例不存在") };
     }
 
-    const movedCount = await caseStore.moveCasesToFolder(ids, targetFolderId);
-    return { success: true, movedCount };
+    const selected = new Set(ids);
+    const usedNames = new Set(index.filter(entry => (entry.folderId || null) === targetFolderId)
+      .map(entry => nameKey(entry.name)));
+    const namesById = new Map();
+    for (const entry of index) {
+      if (!selected.has(entry.id) || (entry.folderId || null) === targetFolderId) continue;
+      namesById.set(entry.id, reserveCaseName(entry.name, usedNames));
+    }
+    const origin = await readOrigin();
+    const nextOriginName = origin && !origin.deleted ? namesById.get(origin.caseId) : null;
+    const movedCount = await caseStore.moveCasesToFolder(ids, targetFolderId, {
+      namesById,
+      extraWrites: nextOriginName ? { [ORIGIN_KEY]: { ...origin, caseNameSnapshot: nextOriginName } } : {}
+    });
+    const renamedCount = index.filter(entry => namesById.has(entry.id) && namesById.get(entry.id) !== entry.name).length;
+    return { success: true, movedCount, renamedCount };
   }
 
   /**

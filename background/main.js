@@ -24,6 +24,7 @@ import { createApplicationRoutes } from "./routes.js";
 import { createSidePanelController } from "./side-panel.js";
 
 import { createScreencastManager } from "./capture/screencast.js";
+import { createAccessibilityCollector } from "./capture/accessibility.js";
 import { createScreenshotManager } from "./capture/screenshots.js";
 
 import { createActionLog } from "./recording/action-log.js";
@@ -36,6 +37,7 @@ import * as caseStore from "./store/case-store.js";
 import { createCaseStoreCoordinator } from "./store/case-migration.js";
 import { createCaseManager } from "./store/cases.js";
 import { createMediaCleanupManager } from "./store/media-cleanup.js";
+import { createDraftManager } from "./store/drafts.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
 
@@ -90,6 +92,7 @@ const screenshots = createScreenshotManager({
 });
 
 const scope = createRecordingScope({ screencast });
+const accessibility = createAccessibilityCollector({ screencast, scope });
 
 const actionLog = createActionLog({ t, scope, screenshots, mediaCleanup, notifyStepsUpdated });
 
@@ -103,6 +106,8 @@ const session = createRecordingSession({
 });
 
 const sidePanel = createSidePanelController({ isRecordableTab: scope.isRecordableTab });
+const drafts = createDraftManager({ session, queueCaseWrite,
+  drainRegistrations: () => queueTabRegistration.drain(), notifyStepsUpdated });
 
 // --- Startup ----------------------------------------------------------------
 registerInstallHandler();
@@ -150,9 +155,11 @@ screenshots.recoverInterruptedJobs().then(count => {
 
 // --- Runtime boundaries -----------------------------------------------------
 registerMessageRouter(createApplicationRoutes({
+  accessibility,
   actionLog,
   actionStore,
   cases,
+  drafts,
   loadLocaleMessages,
   mediaCleanup,
   notifyStepsUpdated,
@@ -172,5 +179,7 @@ registerBrowserEventHandlers({
   scope,
   screencast,
   screenshots,
-  sidePanel
+  sidePanel,
+  drafts,
+  queueRecordingTransition
 });

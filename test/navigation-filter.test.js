@@ -93,6 +93,49 @@ test("a destroyed click frame still waits for the resulting navigation", async (
   assert.deepEqual(storage.data.actionOrder, ["login"]);
 });
 
+test("a close control inside a removed iframe records without top-level navigation", async () => {
+  const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+  chrome.tabs = { get: async () => rootTab, sendMessage: async () => { throw new Error("Frame was removed"); } };
+  chrome.webNavigation = { getAllFrames: async () => [{ frameId: 0, documentId: "top" }] };
+  const result = await actionLog.logClick({ payload: { id: "close-frame", type: "click", url: "https://example.test/dialog" } },
+    { tab: rootTab, frameId: 7, documentId: "dialog-doc" });
+  assert.equal(result.ignored, undefined);
+  assert.equal(storage.data["action:close-frame"].frameClosedAfterClick, true);
+  assert.equal(storage.data["action:close-frame"].openedChildPage, undefined);
+});
+
+test("iframe navigation records a distinct outcome from iframe removal", async () => {
+  const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+  chrome.tabs = { get: async () => rootTab, sendMessage: async () => { throw new Error("Document was replaced"); } };
+  chrome.webNavigation = { getAllFrames: async () => [{ frameId: 0 }, { frameId: 7, documentId: "new-doc" }] };
+  await actionLog.logClick({ payload: { id: "frame-nav", type: "click", url: "https://example.test/dialog" } },
+    { tab: rootTab, frameId: 7, documentId: "old-doc" });
+  assert.equal(storage.data["action:frame-nav"].frameClosedAfterClick, undefined);
+  assert.equal(storage.data["action:frame-nav"].frameNavigatedAfterClick, true);
+});
+
+test("a stalled browser frame query cannot block a DOM-validated click", { timeout: 3000 }, async () => {
+  const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+  chrome.tabs = { get: async () => rootTab, sendMessage: async () => ({ changed: true }) };
+  chrome.webNavigation = { getAllFrames: () => new Promise(() => {}) };
+  await actionLog.logClick({ payload: { id: "frame-effect", type: "click", url: "https://example.test/dialog" } },
+    { tab: rootTab, frameId: 7, documentId: "dialog-doc" });
+  assert.deepEqual(storage.data.actionOrder, ["frame-effect"]);
+  assert.equal(storage.data["action:frame-effect"].frameClosedAfterClick, undefined);
+});
+
+test("missing browser frame information cannot turn an inert iframe click into a close", async () => {
+  for (const result of [null, [], [{ frameId: 0 }, { frameId: 7, documentId: "same-doc" }], "error"]) {
+    const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+    chrome.tabs = { get: async () => rootTab, sendMessage: async () => ({ changed: false }) };
+    chrome.webNavigation = { getAllFrames: async () => { if (result === "error") throw new Error("Unavailable"); return result; } };
+    const outcome = await actionLog.logClick({ payload: { id: "inert-frame", type: "click", url: "https://example.test/dialog" } },
+      { tab: rootTab, frameId: 7, documentId: "same-doc" });
+    assert.equal(outcome.ignored, true);
+    assert.deepEqual(storage.data.actionOrder, []);
+  }
+});
+
 test("click navigation uses the event URL when sender metadata has already changed", async () => {
   const { actionLog, storage } = await setup({
     waitForBrowserContextChange: async () => null,

@@ -50,6 +50,10 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       && lastAction.pageName === payload.pageName
       && lastAction.target
       && payload.target
+      && typeof payload.target.domPath === "string" && payload.target.domPath.length > 0
+      && (lastAction.frameId ?? 0) === payload.frameId
+      && (lastAction.documentId ?? null) === payload.documentId
+      && lastAction.url === payload.url
       && lastAction.target.domPath === payload.target.domPath;
     if (!sameTarget) return false;
 
@@ -60,6 +64,7 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     // instead of blanking while the user is still typing.
     const changes = {
       value: payload.value,
+      ...(payload.accessibility ? { accessibility: payload.accessibility } : {}),
       timestamp: payload.timestamp,
       ...(willCapture ? pendingCaptureFields() : {})
     };
@@ -125,8 +130,12 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       : write();
   }
 
-  async function logUnlocked(payload, senderTab, { beforeFrameData = null } = {}) {
+  async function logUnlocked(payload, senderTab, { beforeFrameData = null, frameId = 0, documentId = null } = {}) {
     if (!senderTab) return;
+    // Browser-provided identity prevents identical paths in different documents
+    // from being folded together. Do not trust identity supplied by the page.
+    payload.frameId = frameId;
+    payload.documentId = documentId;
     payload.id = payload.id || generateActionId();
 
     const isLifecycle = payload.type === "navigate" || payload.type === "newPage";
@@ -192,7 +201,14 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     const beforeKey = beforeCandidateKey
       ? await screenshots.storeFrameBlob(beforeCandidateKey, beforeData, highlightBox)
       : null;
-    if (beforeKey) payload.screenshotBeforeKey = beforeKey;
+    if (beforeKey) {
+      payload.screenshotBeforeKey = beforeKey;
+      // Only this explicit field opts a frame into an overlay. Legacy images
+      // already contain their highlight and must not be highlighted twice.
+      if (highlightBox?.coordinateSpace === "top-viewport") {
+        payload.screenshotBeforeHighlight = { ...highlightBox };
+      }
+    }
 
     try {
       await actionStore.appendAction(payload);
@@ -212,19 +228,43 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
    * navigation, or a new tab/window. Without this, every stray click on inert
    * page chrome becomes a step.
    */
-  async function logClick(request, sender) {
+  async function logClick(request, sender, options = {}) {
     const senderTab = sender.tab;
     if (!senderTab?.id) return { success: false, error: t("errorNoClickPage", [], "未找到点击所在网页") };
 
     // Grabbed now, before the effect-validation wait below and before any
     // navigation the click triggers -- this is the page as the user saw it when
     // they clicked. It stays valid even if the click closes the tab.
-    const beforeFrameData = screenshots.snapshotFrameData(senderTab.id);
+    const beforeFrameData = options.beforeFrameData ?? screenshots.snapshotFrameData(senderTab.id);
     const clickAt = Number(request.payload?.timestamp) || Date.now();
+    const validationDeadline = Date.now() + CLICK_EFFECT_TIMEOUT_MS;
     let domChanged = false;
+    let sourceFrameChange = null;
     let browserContextChange = null;
     let checkingNavigation = true;
     const sourceUrl = sender.frameId ? senderTab.url : request.payload?.url || senderTab.url;
+    async function detectSourceFrameChange() {
+      if (!sender.frameId || !chrome.webNavigation?.getAllFrames) return null;
+      try {
+        const frames = await chrome.webNavigation.getAllFrames({ tabId: senderTab.id });
+        // A failed/incomplete frame query is not proof that a dialog closed.
+        if (!Array.isArray(frames) || !frames.some(frame => frame.frameId === 0)) return null;
+        const frame = frames.find(item => item.frameId === sender.frameId);
+        if (!frame) return "removed";
+        if (sender.documentId && frame.documentId && frame.documentId !== sender.documentId) return "navigated";
+      } catch { /* Preserve DOM/navigation evidence if the browser query fails. */ }
+      return null;
+    }
+    async function waitForSourceFrameChange() {
+      if (!sender.frameId || !chrome.webNavigation?.getAllFrames) throw new Error("No source frame to observe");
+      const deadline = Date.now() + CLICK_EFFECT_TIMEOUT_MS;
+      do {
+        const change = await detectSourceFrameChange();
+        if (change) return { sourceFrameChange: change };
+        await wait(40);
+      } while (checkingNavigation && Date.now() < deadline);
+      throw new Error("No source frame change observed");
+    }
     async function waitForNavigation() {
       const deadline = Date.now() + CLICK_EFFECT_TIMEOUT_MS;
       do {
@@ -262,7 +302,8 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
               if (!change) throw new Error("No browser context change observed");
               return { browserContextChange: change };
             }),
-          waitForNavigation()
+          waitForNavigation(),
+          waitForSourceFrameChange()
         ]);
         const outcome = await Promise.race([
           evidence,
@@ -271,6 +312,7 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
           })
         ]);
         domChanged = !!outcome.domChanged;
+        sourceFrameChange = outcome.sourceFrameChange || null;
         browserContextChange = outcome.browserContextChange || null;
       } catch (error) {
         // A navigation may destroy the originating frame before it responds.
@@ -289,7 +331,18 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     }
 
     browserContextChange ||= scope.findBrowserContextChange(senderTab.id, clickAt);
-    if (!request.forceValid && !domChanged && !navigated && !browserContextChange) {
+    // A final snapshot can annotate a frame close when DOM evidence won the
+    // race. Keep this browser query bounded too, including for forced clicks.
+    const remaining = Math.max(0, validationDeadline - Date.now());
+    if (!sourceFrameChange && sender.frameId && remaining) {
+      let frameTimer;
+      try {
+        sourceFrameChange = await Promise.race([detectSourceFrameChange(), new Promise(resolve => {
+          frameTimer = setTimeout(() => resolve(null), Math.min(remaining, 100));
+        })]);
+      } finally { clearTimeout(frameTimer); }
+    }
+    if (!request.forceValid && !domChanged && !navigated && !browserContextChange && !sourceFrameChange) {
       // The only gate that cannot be decided in the page, because it needs the
       // cross-tab view, and the one that hid a missing step best: the click looks
       // identical to a stray one. Report what was actually observed, so the next
@@ -315,8 +368,10 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       request.payload.screenshotSkippedReason = SCREENSHOT_SKIPPED_REASON.opensChildPage;
       request.payload.openedChildPage = true;
     }
+    if (sourceFrameChange === "removed") request.payload.frameClosedAfterClick = true;
+    if (sourceFrameChange === "navigated") request.payload.frameNavigatedAfterClick = true;
 
-    await log(request.payload, senderTab, { beforeFrameData });
+    await log(request.payload, senderTab, { beforeFrameData, frameId: sender.frameId, documentId: sender.documentId });
     notifyStepsUpdated();
     return { success: true };
   }

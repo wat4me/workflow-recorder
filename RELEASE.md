@@ -2,8 +2,11 @@
 
 ## 1.3.0
 
+- Capture browser-computed local accessibility context separately from DOM evidence and include both in AI copy and exported steps, including when screenshots are off.
+
 - Redesign the workbench with a compact case list, nested folders, clickable breadcrumbs and consistent colors by folder level.
 - Choose a folder when saving from the side panel and verify the saved classification.
+- Limit case names to 120 characters and support renaming. Number duplicate names within each folder on save, import or move; reject conflicting manual renames without overwriting cases.
 - Keep recording names scoped to the current workspace and restore saved names when loading cases.
 - Make screenshot settings apply consistently when starting or continuing a recording; improve capture status wording.
 - Protect screenshot publication and cleanup with serialization and transaction completion checks.

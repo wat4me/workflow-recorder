@@ -16,7 +16,7 @@
 
 - 浏览信息：用户纳入录制范围的网页网址、页面标题和页面之间的打开关系。
 - 用户活动：点击、文本输入、选择、按键、悬停、拖拽和页面跳转。
-- 网站内容：页面元素标签、有限属性、ARIA 可访问名称、附近文本、有限 DOM 上下文和页面截图。
+- 网站内容：页面元素标签、有限属性、ARIA 属性、浏览器计算的可访问性角色、名称、描述、值和状态、有限父级可访问性上下文、附近文本、有限 DOM 上下文和页面截图。
 - 表单内容：用户在录制期间输入或选择的值。包括密码输入框的实际输入值。
 - 可能出现在用户所选网页、输入值或截图中的个人身份信息、身份验证信息、个人通信、财务与支付信息、健康信息或位置信息。
 
@@ -38,7 +38,7 @@
 
 ### 6. 用户选择与注意事项
 
-录制仅在用户点击“开始录制”后进行，并在用户点击“停止录制”后停止。用户不应录制不希望保存在本机或包含在导出文件中的账号密码、支付信息、健康信息、个人通信或其他敏感内容。Chrome 可能在录制期间显示调试提示，这是扩展为生成步骤截图而使用 Page.startScreencast 的浏览器行为。
+录制仅在用户点击“开始录制”后进行，并在用户点击“停止录制”后停止。用户不应录制不希望保存在本机或包含在导出文件中的账号密码、支付信息、健康信息、个人通信或其他敏感内容。Chrome 可能在录制期间显示调试提示，这是扩展读取操作目标的局部可访问性信息以及在启用截图时接收页面帧的浏览器行为。关闭截图不关闭可访问性采集，停止录制后会断开调试连接。
 
 ### 7. 儿童隐私
 
@@ -64,7 +64,7 @@ The extension may handle:
 
 - Browsing information: URLs, page titles, and opening relationships between pages included in a recording.
 - User activity: clicks, text input, selections, key presses, hovers, drags, and navigation.
-- Website content: element tags, limited attributes, ARIA-accessible names, nearby text, limited DOM context, and page screenshots.
+- Website content: element tags, limited attributes, ARIA attributes, browser-computed accessibility roles, names, descriptions, values and states, limited ancestor accessibility context, nearby text, limited DOM context, and page screenshots.
 - Form content: values typed or selected during recording. This includes actual values entered into password fields.
 - Personal identification, authentication information, personal communications, financial and payment information, health information, or location information that may appear in a user-selected page, input value, or screenshot.
 
@@ -86,7 +86,7 @@ Users can delete steps or saved cases in the extension interface. The extension 
 
 ### 6. User choice and precautions
 
-Recording begins only after the user clicks “Start recording” and stops after the user clicks “Stop recording.” Users should not record credentials, payment information, health information, private communications, or other sensitive content they do not want stored locally or included in export files. Chrome may display a debugger notification during recording because the extension uses Page.startScreencast to generate step screenshots.
+Recording begins only after the user clicks “Start recording” and stops after the user clicks “Stop recording.” Users should not record credentials, payment information, health information, private communications, or other sensitive content they do not want stored locally or included in export files. Chrome may display a debugger notification during recording because the extension reads local accessibility context for operation targets and, when screenshots are enabled, receives page frames. Accessibility collection continues with screenshots off; the debugger is detached when recording stops.
 
 ### 7. Children's privacy
 

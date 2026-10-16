@@ -1,21 +1,9 @@
 /**
- * How much work a recording does for step screenshots.
- *
- * The only thing left to choose is whether to capture at all. Sharpness presets
- * used to live here, and measurement is what removed them: run three times each,
- * the high and medium presets came out 3% apart -- less than the 300 MB spread of
- * a single preset measured against itself -- and not by the ratio their pixel
- * counts predict. What they did trade reliably was stored file size, which is not
- * worth a setting a user would reasonably pick expecting to save memory.
- *
- * The measurement did show where the cost actually is. It follows the number of
- * steps (roughly 15-20 MB each, mostly the decode-and-canvas work of drawing the
- * target highlight and re-encoding), not the size of a frame, and not how long a
- * recording runs: a real portal recorded idle for 25 seconds cost 12 MB, while
- * forty steps on a form cost 887 MB. Turning screenshots off is the whole
- * decision, which is why it is the only control the settings dialog offers.
- *
- * Frames are therefore always taken at the tab's native viewport resolution.
+ * Screenshot preference, snapshotted at the start of each recording.
+ * Frames retain their native resolution. Originals and target geometry are
+ * stored separately; previews overlay the target and exports compose it lazily.
+ * Earlier memory measurements included per-step full-size canvas composition
+ * and do not describe the current recording pipeline.
  */
 
 export const CAPTURE_SETTINGS_KEY = "captureSettings";

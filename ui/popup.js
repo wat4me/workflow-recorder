@@ -24,7 +24,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     moreActionsBtn: document.getElementById("more-actions-btn"),
     moreActionsMenu: document.getElementById("more-actions-menu"),
     copyTaskBtn: document.getElementById("copy-task-btn"),
-    saveCurrentCaseBtn: document.getElementById("save-current-case-btn")
+    saveCurrentCaseBtn: document.getElementById("save-current-case-btn"),
+    draftSelect: document.getElementById("recording-draft-select"),
+    draftStatus: document.getElementById("recording-draft-status")
   };
 
   const openConsoleBtn = document.getElementById("open-console-btn");
@@ -99,14 +101,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !Number.isInteger(tab.windowId) || tab.url?.startsWith(chrome.runtime.getURL(""))) {
+    if (!tab?.id || !Number.isInteger(tab.windowId) || !/^(https?|file):/i.test(tab.url || "") || tab.url.startsWith(chrome.runtime.getURL(""))) {
       await syncPageLayout(false);
       return;
     }
     layoutTabId = tab.id;
     layoutWindowId = tab.windowId;
     layoutPort.postMessage({ windowId: tab.windowId });
-    chrome.runtime.sendMessage({
+    await chrome.runtime.sendMessage({
       action: MESSAGE.setSidePanelLayout,
       open: true,
       tabId: tab.id,
@@ -119,15 +121,24 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.close();
   });
 
+  function resumePanelContext() {
+    if (document.visibilityState !== "visible") return;
+    syncPageLayout(true).then(() => panel.refreshState()).catch(error => console.warn("[Drafts] Panel binding failed:", error));
+  }
+  document.addEventListener("visibilitychange", resumePanelContext);
+  window.addEventListener("focus", resumePanelContext);
+
   window.addEventListener("unload", () => {
     compactLayout.removeEventListener("change", fitToolbarLabels);
     toolbarObserver.disconnect();
     labelObserver.disconnect();
+    document.removeEventListener("visibilitychange", resumePanelContext);
+    window.removeEventListener("focus", resumePanelContext);
     stepView.dispose();
     syncPageLayout(false);
     layoutPort.disconnect();
   });
 
-  syncPageLayout(true);
+  await syncPageLayout(true);
   panel.refreshState();
 });

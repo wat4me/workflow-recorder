@@ -7,7 +7,7 @@ import {
   SCREENSHOT_STATUS,
   pendingCaptureFields
 } from "./screenshot-status.js";
-import { addTargetHighlight, base64JpegToBlob } from "./image-processing.js";
+import { base64JpegToBlob } from "./image-processing.js";
 import { beforeScreenshotKey, nextScreenshotKey } from "./screenshot-keys.js";
 
 export { mapHighlightRect } from "./image-processing.js";
@@ -530,8 +530,9 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
       const data = typeof frameData === "string" ? frameData : frameData.data;
       if (!data) return null;
       const cleanBlob = base64JpegToBlob(data);
-      const storedBlob = await addTargetHighlight(cleanBlob, highlightBox);
-      await mediaStore.putBlob(key, storedBlob);
+      // Keep the original JPEG. Target geometry travels on the action; painting
+      // belongs to previews and document export, never the recording hot path.
+      await mediaStore.putBlob(key, cleanBlob);
       return key;
     } catch (error) {
       console.warn("[Screenshots] Failed to store before-frame:", error.message);

@@ -161,6 +161,95 @@ test("a snapshot is banked without becoming the baseline", async () => {
   assert.equal(storage.data.caseIndex.length, 1);
 });
 
+test("duplicate saves receive folder-local numbers without replacing earlier snapshots", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("original", { screenshotKey: "shot:original" })]);
+  const first = await cases.save("Login");
+  seedWorkspace(storage, [action("changed")]);
+  const second = await cases.save(" login ");
+  const third = await cases.save("Login");
+  const numbered = await cases.save("Login（2）");
+  assert.deepEqual([first, second, third, numbered].map(result => result.case.name),
+    ["Login", "login（2）", "Login（3）", "Login（4）"]);
+  assert.equal(new Set(storage.data.caseIndex.map(entry => entry.id)).size, 4);
+  assert.equal(storage.data[`case:${first.case.id}`].actions[0].id, "original");
+  assert.deepEqual(storage.data[`caseMedia:${first.case.id}`], ["shot:original"]);
+  const { folder } = await cases.createFolder("Other");
+  assert.equal((await cases.save("Login", false, folder.id)).case.name, "Login");
+  const long = "长".repeat(120);
+  await cases.save(long);
+  const limited = await cases.save(long);
+  assert.equal(limited.case.name, "长".repeat(117) + "（2）");
+  assert.equal(limited.case.name.length, 120);
+});
+
+test("serialized concurrent saves reserve distinct names and keep both entries", async () => {
+  let pending = Promise.resolve();
+  const { cases, storage } = await setup({ queueCaseWrite: fn => {
+    const next = pending.then(fn);
+    pending = next.catch(() => {});
+    return next;
+  } });
+  seedWorkspace(storage, [action("s1")]);
+  const saved = await Promise.all([cases.save("Same"), cases.save("Same"), cases.save("Same")]);
+  assert.deepEqual(saved.map(result => result.case.name), ["Same", "Same（2）", "Same（3）"]);
+  assert.equal(storage.data.caseIndex.length, 3);
+});
+
+test("rename rejects same-folder collisions while preserving legacy duplicates and cross-folder names", async () => {
+  const { cases, storage } = await setup();
+  seedCase(storage, { id: "first", name: "Login", actions: [action("one")] });
+  seedCase(storage, { id: "legacy", name: "Login", actions: [action("two")] });
+  seedCase(storage, { id: "other", name: "Other", actions: [action("three")] });
+  const before = structuredClone(storage.data);
+  const conflict = await cases.rename("other", "  LOGIN  ");
+  assert.equal(conflict.success, false);
+  assert.match(conflict.error, /同名用例/);
+  assert.deepEqual(storage.data, before);
+  assert.equal((await cases.rename("legacy", "Login")).success, true);
+  const { folder } = await cases.createFolder("Separate");
+  await cases.moveToFolder(["other"], folder.id);
+  assert.equal((await cases.rename("other", "Login")).success, true);
+});
+
+test("imports number collisions against existing unfiled cases and within the incoming batch", async () => {
+  const { cases, storage } = await setup();
+  seedCase(storage, { id: "existing", name: "Flow", actions: [action("existing-step")] });
+  const result = await cases.importMany(["one", "two"].map(id => ({
+    id: `case_import_${id}`, name: "Flow", createdAt: 1, actions: [action(id)], pages: []
+  })));
+  assert.equal(result.success, true);
+  assert.equal(result.renamedCount, 2);
+  assert.deepEqual(storage.data.caseIndex.map(item => item.name).sort(), ["Flow", "Flow（2）", "Flow（3）"]);
+  assert.equal(storage.data["case:existing"].actions[0].id, "existing-step");
+});
+
+test("batch moves number name conflicts and update the loaded origin without touching steps or media", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("s1", { screenshotKey: "shot:shared" })]);
+  const { folder: source } = await cases.createFolder("Source");
+  const { folder: target } = await cases.createFolder("Target");
+  const first = await cases.save("Flow", false, source.id);
+  const second = await cases.save("Flow");
+  const existing = await cases.save("Flow", false, target.id);
+  await cases.load(second.case.id);
+  const before = structuredClone(storage.data);
+  const result = await cases.moveToFolder([first.case.id, second.case.id, existing.case.id], target.id);
+  assert.equal(result.success, true);
+  assert.equal(result.renamedCount, 2);
+  const index = storage.data.caseIndex;
+  assert.deepEqual(index.map(entry => entry.name).sort(), ["Flow", "Flow（2）", "Flow（3）"]);
+  assert.ok(index.every(entry => entry.folderId === target.id));
+  assert.equal(index.find(entry => entry.id === existing.case.id).name, "Flow");
+  assert.equal(storage.data.workspaceOrigin.caseNameSnapshot, index.find(entry => entry.id === second.case.id).name);
+  for (const [key, value] of Object.entries(before)) {
+    if (key !== "caseIndex" && key !== "workspaceOrigin") assert.deepEqual(storage.data[key], value, key);
+  }
+  const again = await cases.moveToFolder([first.case.id, second.case.id], target.id);
+  assert.equal(again.renamedCount, 0);
+  assert.deepEqual(storage.data.caseIndex, index);
+});
+
 test("a scene saved by an earlier build remains a readable flat case", async () => {
   const { cases, caseStore, storage } = await setup();
   await caseStore.writeCase({

@@ -20,6 +20,7 @@ export function attachStepMedia(ctx) {
     if (distanceFromBottom <= 120) ctx.scrollToLatest();
   }
   const loading = new WeakMap();
+  const highlights = new WeakMap();
   function unloadScreenshot(media) {
     const url = mediaUrls.get(media);
     if (!url && !loading.has(media)) return;
@@ -39,7 +40,7 @@ export function attachStepMedia(ctx) {
     const token = {};
     loading.set(media, token);
     try {
-      const blob = await getBlob(key);
+      const blob = await globalThis.RecorderScreenshotMedia.getThumbnail(key);
       if (loading.get(media) !== token || !media.isConnected) return;
       loading.delete(media);
       if (!blob) {
@@ -56,10 +57,16 @@ export function attachStepMedia(ctx) {
       image.className = "step-screenshot";
       image.src = url;
       image.alt = media.dataset.screenshotAlt;
+      const surface = document.createElement("span");
+      surface.className = "screenshot-surface";
+      const highlight = globalThis.RecorderScreenshotMedia.createHighlightOverlay(image);
+      highlight.update(highlights.get(media));
+      surface.append(image, highlight.element);
       media.className = "step-media";
       media.disabled = false;
       media.title = t("clickToZoom", [], "点击放大截图");
-      media.replaceChildren(image);
+      media.style.minHeight = "";
+      media.replaceChildren(surface);
     } finally {
       if (loading.get(media) === token) loading.delete(media);
     }
@@ -78,22 +85,24 @@ export function attachStepMedia(ctx) {
     ctx.observer = observer;
     return observer;
   }
-  function buildMedia(key, alt) {
+  function buildMedia(key, alt, highlight = null) {
     const media = document.createElement("button");
     media.type = "button";
     media.disabled = true;
     media.className = "step-media is-loading";
     media.dataset.screenshotKey = key;
     media.dataset.screenshotAlt = alt;
+    highlights.set(media, highlight);
     media.textContent = t("loadingStepScreenshot", [], "正在读取步骤截图…");
     media.addEventListener("click", async () => {
       try {
         const blob = await getBlob(key);
         if (!blob || !media.isConnected) return;
-        const mediaItems = [...stepsContainer.querySelectorAll("[data-screenshot-key]")];
+        const mediaItems = ctx.mediaSequence();
         openImagePreview(blob, media.dataset.screenshotAlt, {
-          sequence: mediaItems.map(item => ({ key: item.dataset.screenshotKey, alt: item.dataset.screenshotAlt })),
-          index: mediaItems.indexOf(media), showFit: readOnly
+          sequence: mediaItems,
+          index: mediaItems.findIndex(item => item.key === key && item.alt === media.dataset.screenshotAlt), showFit: readOnly,
+          highlight: highlights.get(media)
         });
       } catch (error) { console.error("[StepView] Failed to open screenshot:", error); }
     });
@@ -178,13 +187,30 @@ export function attachStepMedia(ctx) {
   }
   function syncMedia(entry, action, index, captureState) {
     const beforeKey = action.screenshotBeforeKey || "";
+    const expanded = ctx.isMediaExpanded?.(action, index) ?? true;
+    if (entry.mediaToggle) {
+      const count = Number(!!beforeKey) + Number(!!action.screenshotKey);
+      entry.mediaToggle.hidden = count === 0;
+      entry.mediaToggle.setAttribute("aria-expanded", String(expanded));
+      entry.mediaToggle.textContent = expanded
+        ? t("collapseStepScreenshots", [count], `收起截图（${count}）`)
+        : t("expandStepScreenshots", [count], `展开截图（${count}）`);
+    }
+    entry.mediaRow.hidden = !expanded;
+    if (!expanded) {
+      releaseMedia(entry.beforeMedia);
+      releaseMedia(entry.afterMedia);
+      entry.beforeMedia = entry.afterMedia = null;
+      entry.beforeKey = entry.afterKey = entry.afterRenderKey = undefined;
+      return;
+    }
     if (entry.beforeKey !== beforeKey) {
       releaseMedia(entry.beforeMedia);
       entry.beforeMedia = null;
       entry.beforeKey = beforeKey;
       entry.beforeWrap.classList.toggle("is-hidden", !beforeKey);
       if (beforeKey) {
-        entry.beforeMedia = buildMedia(beforeKey, screenshotTitle(action, index, "before"));
+        entry.beforeMedia = buildMedia(beforeKey, screenshotTitle(action, index, "before"), action.screenshotBeforeHighlight);
         entry.beforeWrap.appendChild(entry.beforeMedia);
       }
     }

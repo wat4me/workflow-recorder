@@ -19,15 +19,17 @@
 
     const { t } = globalThis.RecorderI18n;
     const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
-    const { readActions, sendRuntimeMessage } = globalThis.RecorderBridge;
+    const { readActions, sendRuntimeMessage: sendMessage } = globalThis.RecorderBridge;
     const { confirmAction, notify, promptText, reportError } = globalThis.RecorderDialogs;
     const { ensureRecordingConsent } = globalThis.RecorderConsent;
     const { exportWorkflow } = globalThis.RecorderExport;
     const { CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, recordingCapturePlanFor } = globalThis.RecorderCaptureSettings;
     const { openCaptureSettings } = globalThis.RecorderSettingsDialog;
+    const { STEP_DISPLAY_SETTINGS_KEY, normalize: normalizeDisplaySettings } = globalThis.RecorderStepDisplaySettings;
 
     let isRecording = false;
     let recordingRequestPending = false;
+    let copyRequestPending = false;
     let screenshotsEnabled = true;
     // The case name is asked for when it is needed instead of living in a field
     // on the page. Remembering the answer is what lets exporting and copying an
@@ -39,6 +41,19 @@
     // screenshot, and each read is a message plus a lookup per stored step.
     let renderedActions = [];
     let renderedCaptureState = {};
+    let renderedStored = null;
+    let refreshPromise = null;
+    let refreshVersion = 0;
+    let lastStorageUpdateAt = 0;
+    const draftSelect = elements.draftSelect;
+    const draftStatus = elements.draftStatus;
+    async function sendRuntimeMessage(message, timeoutMs) {
+      return sendMessage({
+        ...(renderedStored?.draftId ? { workspaceDraftId: renderedStored.draftId } : {}),
+        ...(message.action === MESSAGE.getActions ? { scopeTabId: await resolveRootTabId() } : {}),
+        ...message
+      }, timeoutMs);
+    }
 
     function closeMoreActions() {
       if (!moreActionsMenu || !moreActionsBtn) return;
@@ -110,11 +125,52 @@
       return renderedCaptureState;
     }
 
-    async function refreshState() {
-      const [stored, actions] = await Promise.all([
-        chrome.storage.local.get(["isRecording", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY]),
-        readActions()
-      ]);
+    function refreshState() {
+      ++refreshVersion;
+      if (refreshPromise) return refreshPromise;
+      refreshPromise = (async () => {
+        // Coalesce callers and serialize reads. A storage change during a read
+        // invalidates that snapshot, so an older response cannot replace newer UI.
+        await new Promise(resolve => setTimeout(resolve, 16));
+        let version;
+        do {
+          version = refreshVersion;
+          const tabId = await resolveRootTabId();
+          const [stored, workspace] = await Promise.all([
+            chrome.storage.local.get(["isRecording", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, STEP_DISPLAY_SETTINGS_KEY]),
+            Number.isInteger(tabId) ? sendMessage({ action: MESSAGE.getDraftState, tabId }) : readActions().then(actions => ({ actions }))
+          ]);
+          if (workspace.success === false) throw new Error(workspace.error || "草稿读取失败");
+          if (version === refreshVersion) renderState({ ...stored, ...(workspace.state || {}),
+            draftId: workspace.draftId || null, draftActive: workspace.active !== false, drafts: workspace.drafts || [] }, workspace.actions);
+        } while (version !== refreshVersion);
+      })().finally(() => { refreshPromise = null; });
+      return refreshPromise;
+    }
+
+    function renderState(stored, actions, changedIds = null) {
+      renderedStored = stored;
+      stepView.setWorkspaceContext?.({ workspaceDraftId: stored.draftId || null });
+      if (draftSelect) {
+        draftSelect.closest(".draft-toolbar").hidden = !stored.draftId;
+        const signature = JSON.stringify([stored.draftId, stored.drafts?.map(draft => [draft.id, draft.title])]);
+        if (draftSelect.dataset.signature !== signature) {
+          draftSelect.replaceChildren(...(stored.drafts || []).map(draft => {
+            const option = document.createElement("option");
+            option.value = draft.id;
+            option.textContent = draft.title || draft.url || t("unnamedCase", [], "未命名用例");
+            return option;
+          }));
+          draftSelect.value = stored.draftId || "";
+          draftSelect.dataset.signature = signature;
+        }
+        draftSelect.disabled = recordingRequestPending;
+      }
+      if (draftStatus) {
+        draftStatus.textContent = stored.draftActive === false
+          ? t("draftInactive", [], "已暂停 · 点击继续录制可返回此草稿")
+          : t("draftAutoSaved", [], "草稿自动保留 · 切换页面互不混入");
+      }
       // Names belong to a workspace, not the lifetime of this side-panel page.
       // The origin survives edits; root recordings are identified by their first step.
       const origin = stored.workspaceOrigin;
@@ -128,16 +184,18 @@
       // Read on the same round trip as the rest of the panel state: this decides
       // whether the screenshot actions are offered at all.
       screenshotsEnabled = recordingCapturePlanFor(stored).screenshots;
+      stepView.setScreenshotsExpandedDefault(normalizeDisplaySettings(stored[STEP_DISPLAY_SETTINGS_KEY]).screenshotsExpanded);
       renderedActions = actions;
       const canContinue = !isRecording && actions.length > 0;
-      if (copyTaskBtn) copyTaskBtn.disabled = actions.length === 0;
+      if (copyTaskBtn) copyTaskBtn.disabled = copyRequestPending || actions.length === 0;
 
       recordBtn.disabled = recordingRequestPending;
       setRecordButtonState(isRecording, canContinue);
       updateSecondaryActions(canContinue);
       const captureState = acceptCaptureState(stored.screenshotCaptureState || {});
       updateManualScreenshotAction(captureState);
-      stepView.renderSteps(actions, captureState);
+      if (changedIds && stepView.patchSteps) stepView.patchSteps(actions, captureState, changedIds);
+      else stepView.renderSteps(actions, captureState);
       onStateRendered({ isRecording, actions });
     }
 
@@ -146,7 +204,7 @@
       const acceptedState = acceptCaptureState(captureState || {});
       updateManualScreenshotAction(acceptedState);
       if (renderedActions.length === 0) return;
-      stepView.renderSteps(renderedActions, acceptedState);
+      stepView.updateCaptureState(acceptedState);
     }
 
     function setRecordButtonState(recording, canContinue = false) {
@@ -222,13 +280,20 @@
     }
 
     function bindEvents() {
+      draftSelect?.addEventListener("change", async () => {
+        const draftId = draftSelect.value;
+        draftSelect.disabled = true;
+        const response = await sendMessage({ action: MESSAGE.selectDraft, draftId, tabId: await resolveRootTabId() }, 30000);
+        if (!response?.success) reportError(response?.error || "草稿切换失败");
+        await refreshState();
+      });
       captureSettingsBtn?.addEventListener("click", async () => {
         // Offered next to the recording controls rather than inside the more-actions
         // menu: that menu only appears once there are steps, and the capture policy
         // has to be settable before the first recording starts.
         if (await openCaptureSettings()) {
           await refreshState();
-          notify(t("captureSettingsSaved", [], "录制设置已保存，下次开始录制时生效"));
+          notify(t("captureSettingsSaved", [], "设置已保存。截图显示立即生效，采集设置在下次录制时生效。"));
         }
       });
 
@@ -262,6 +327,7 @@
       });
 
       clearStepsBtn?.addEventListener("click", async () => {
+        const workspaceDraftId = renderedStored?.draftId;
         closeMoreActions();
         const confirmed = await confirmAction({
           title: t("clearSteps", [], "清空步骤"),
@@ -276,7 +342,7 @@
         if (!confirmed) return;
 
         clearStepsBtn.disabled = true;
-        const response = await sendRuntimeMessage({ action: MESSAGE.clearSteps });
+        const response = await sendRuntimeMessage({ action: MESSAGE.clearSteps, workspaceDraftId });
         if (!response?.success) {
           reportError(response?.error || t("clearStepsFailed", [], "清空步骤失败"));
         } else if (response.cleanupPending) {
@@ -286,6 +352,7 @@
       });
 
       saveCurrentCaseBtn.addEventListener("click", async () => {
+        const workspaceDraftId = renderedStored?.draftId;
         if (saveCurrentCaseBtn.disabled) return;
         saveCurrentCaseBtn.disabled = true;
         try {
@@ -320,6 +387,10 @@
             label: t("caseName", [], "用例名称"),
             value: caseName,
             confirmText: t("save", [], "保存"),
+            validate: (name, folderId) => name && (caseResponse.cases || []).some(item =>
+              (item.folderId || null) === (folderId || null)
+              && item.name.trim().toLowerCase() === name.toLowerCase())
+              ? t("errorCaseNameExists", [], "当前文件夹已存在同名用例，请换一个名称") : "",
             selection: {
               label: t("saveCaseFolder", [], "保存分类"),
               value: byId.has(currentCase?.folderId) ? currentCase.folderId : "",
@@ -333,6 +404,7 @@
 
           const response = await sendRuntimeMessage({
             action: MESSAGE.saveCase, name: answer.text,
+            workspaceDraftId,
             snapshot: isRecording, folderId: answer.selection || null
           });
           if (response?.success) {
@@ -353,6 +425,9 @@
               }
             }
             flashSaved();
+            if (answer.text.trim() && caseName !== answer.text.trim()) {
+              notify(t("caseSavedAs", [caseName], `已保存为“${caseName}”`));
+            }
           } else {
             reportError(response?.error || t("saveCaseFailed", [], "保存用例失败"));
           }
@@ -364,13 +439,15 @@
       });
 
       async function downloadRecording() {
+        const workspaceDraftId = renderedStored?.draftId;
         // `activeCaseId` only names the workspace while it still matches that case:
         // recording or editing a step clears it. That is what says whether this
         // download has to bank the recording before handing over the archive.
-        const { activeCaseId, workspaceOrigin } = await chrome.storage.local.get(["activeCaseId", "workspaceOrigin"]);
+        const { activeCaseId, workspaceOrigin } = renderedStored?.draftId
+          ? renderedStored : await chrome.storage.local.get(["activeCaseId", "workspaceOrigin"]);
         // The name is asked for once: a workspace that was saved or exported
         // already carries one, and re-asking on every download would be noise.
-        const name = caseName || await askCaseName({
+        let name = caseName || await askCaseName({
           title: t("exportResult", [], "下载录制结果"),
           message: activeCaseId
             ? t(
@@ -395,7 +472,8 @@
             if (!history?.success) throw new Error(history?.error || t("listCasesFailed", [], "读取历史用例失败"));
             const source = (history.cases || []).find(item => item.id === workspaceOrigin?.caseId);
             const saved = await sendRuntimeMessage({
-              action: MESSAGE.saveCase, name, snapshot: isRecording, folderId: source?.folderId || null
+              action: MESSAGE.saveCase, name, snapshot: isRecording, folderId: source?.folderId || null,
+              workspaceDraftId
             });
             if (!saved?.success) {
               // The archive would be the only copy of steps the workbench never
@@ -403,10 +481,13 @@
               reportError(saved?.error || t("saveCaseFailed", [], "保存用例失败"));
               return;
             }
-            caseName = saved.case?.name || caseName;
+            name = saved.case?.name || name;
+            caseName = name;
             flashSaved();
           }
-          await exportWorkflow(await readActions(), name);
+          const response = await sendRuntimeMessage({ action: MESSAGE.getActions, workspaceDraftId });
+          if (!response?.success) throw new Error(response?.error || "草稿读取失败");
+          await exportWorkflow(response.actions, name);
         } catch (error) {
           reportError(error.message || t("exportFailed", [], "导出失败"));
         } finally {
@@ -422,15 +503,27 @@
       downloadDocCompactBtn?.addEventListener("click", downloadRecording);
 
       copyTaskBtn?.addEventListener("click", async () => {
+        if (copyRequestPending) return;
+        copyRequestPending = true;
         copyTaskBtn.disabled = true;
         try {
-          const name = caseName || t("unnamedCase", [], "未命名用例");
+          // Rendering can lag behind a storage update. Copy the committed steps
+          // and surface read failures rather than silently copying stale data.
+          const response = await sendRuntimeMessage({ action: MESSAGE.getActions });
+          if (!response?.success || !Array.isArray(response.actions)) {
+            throw new Error(response?.error || t("copyFailed", [], "复制失败"));
+          }
+          const actions = response.actions;
+          if (!actions.length) throw new Error(t("noSteps", [], "暂无录制步骤"));
+          const sameWorkspace = actions[0].id === renderedActions[0]?.id;
+          const name = (sameWorkspace && caseName) || t("unnamedCase", [], "未命名用例");
           const language = globalThis.RecorderI18n.getLanguage?.() || "zh_CN";
-          await navigator.clipboard.writeText(globalThis.StepDocGenerator.generateTask(name, renderedActions, language));
+          await navigator.clipboard.writeText(globalThis.StepDocGenerator.generateTask(name, actions, language));
           notify(t("copyTaskCopied", [], "任务说明已复制"));
         } catch (error) {
           reportError(error.message || t("copyFailed", [], "复制失败"));
         } finally {
+          copyRequestPending = false;
           copyTaskBtn.disabled = renderedActions.length === 0;
         }
       });
@@ -446,16 +539,42 @@
       // The worker announces changes, and storage events cover a notification
       // missed while Chrome suspends it.
       chrome.runtime.onMessage.addListener(request => {
-        if (request.action === MESSAGE.stepsUpdated) refreshState();
+        if (request.action === MESSAGE.stepsUpdated && Date.now() - lastStorageUpdateAt > 500) refreshState();
       });
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== "local") return;
+        if (changes.activeRecordingDraftId || changes.recordingDraftIndex ||
+            (renderedStored?.draftId && renderedStored.draftActive === false &&
+              Object.keys(changes).some(key => key.startsWith("recordingDraft:")))) {
+          refreshState();
+          return;
+        }
+        if (renderedStored?.draftActive === false) return;
+        if (changes[STEP_DISPLAY_SETTINGS_KEY]) {
+          refreshState();
+          return;
+        }
+        const stateKeys = ["isRecording", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY];
+        const changedRecords = Object.keys(changes).filter(key => key.startsWith("action:"));
         // actionOrder changes on append and delete; an `action:` key changes
         // when a screenshot binds to an existing step.
         const touchedActions = changes.actionOrder || changes.isRecording || changes.workspaceOrigin ||
           Object.keys(changes).some(key => key.startsWith("action:"));
         if (touchedActions) {
-          refreshState();
+          lastStorageUpdateAt = Date.now();
+          if (!renderedStored || refreshPromise) { refreshState(); return; }
+          const stored = { ...renderedStored };
+          for (const key of stateKeys) if (changes[key]) stored[key] = changes[key].newValue;
+          const byId = new Map(renderedActions.map(action => [action.id, action]));
+          for (const key of changedRecords) {
+            const id = key.slice(7);
+            if (changes[key].newValue) byId.set(id, changes[key].newValue);
+            else byId.delete(id);
+          }
+          const order = changes.actionOrder?.newValue || renderedActions.map(action => action.id);
+          if (order.some(id => !byId.has(id))) { refreshState(); return; }
+          renderState(stored, order.map(id => byId.get(id)), changes.actionOrder || changes.isRecording || changes.workspaceOrigin
+            ? null : new Set(changedRecords.map(key => key.slice(7))));
           return;
         }
         // Progress only: which step is capturing changed, the steps did not.

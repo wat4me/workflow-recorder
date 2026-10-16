@@ -104,6 +104,24 @@ function typeMore(actionLog, value) {
   );
 }
 
+test("input merging separates frames, documents, URLs and targets without paths", async () => {
+  for (const variant of ["same", "frame", "document", "url", "missing-path"]) {
+    const { actionLog, storage } = await setup();
+    storage.data.recordingCaptureSettings = { screenshots: false };
+    const target = variant === "missing-path" ? { tagName: "input" } : { ...FIELD };
+    const first = typeStep("s1", "first", { target, frameId: 1, documentId: "doc-a", url: "https://example.test/a",
+      screenshotSkippedReason: "capture-disabled" });
+    seedWorkspace(storage, [first]);
+    await actionLog.log({ type: "type", value: "second", timestamp: 2, target,
+      url: variant === "url" ? "https://example.test/b" : first.url }, TAB, {
+      frameId: variant === "frame" ? 2 : 1, documentId: variant === "document" ? "doc-b" : "doc-a"
+    });
+    const steps = readSteps(storage);
+    assert.equal(steps.length, variant === "same" ? 1 : 2, variant);
+    assert.equal(steps[0].value, variant === "same" ? "second" : "first", variant);
+  }
+});
+
 test("editing an inherited step copies it to a new id first", async () => {
   const { actionLog, cases, storage, scheduled } = await setup();
   seedWorkspace(storage, [

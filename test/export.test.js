@@ -29,13 +29,14 @@ function loadExport(blobs) {
       createElement() { return anchor; }
     },
     setTimeout(callback) { callback(); },
-    fflate: { strToU8: require("fflate").strToU8, zipSync },
+    fflate: require("fflate"),
     RecorderI18n: { t: (key, subs, fallback) => fallback },
     RecorderBridge: { getBlob: async key => blobs.get(key) || null },
     StepDocGenerator: { generate: () => "# Recorded workflow\n" }
   };
   context.globalThis = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "ui", "lib", "archive-stream.js"), "utf8"), context);
   vm.runInContext(
     fs.readFileSync(path.join(__dirname, "..", "ui", "lib", "export.js"), "utf8"),
     context

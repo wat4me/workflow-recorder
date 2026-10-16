@@ -7,9 +7,8 @@
  * less than the run-to-run noise of a single preset, so the switch is the honest
  * version of that choice and the presets are gone.
  *
- * A change applies to the next recording, which is what the note at the bottom
- * says: the screencast parameters are fixed when a session starts, and silently
- * re-tuning a recording in progress would change the frames midway through it.
+ * Capture changes apply to the next recording. Side-panel display preferences
+ * apply immediately and are stored separately from the session capture policy.
  */
 (function () {
   if (globalThis.RecorderSettingsDialog) return;
@@ -17,12 +16,16 @@
   const { t } = globalThis.RecorderI18n;
   const { escapeHtml } = globalThis.RecorderDom;
   const settings = globalThis.RecorderCaptureSettings;
+  const displaySettings = globalThis.RecorderStepDisplaySettings;
 
   /**
    * Resolves true when settings were saved, false when the user backed out.
    */
   async function openCaptureSettings() {
-    const current = await settings.readCaptureSettings();
+    const [current, storedDisplay] = await Promise.all([
+      settings.readCaptureSettings(), chrome.storage.local.get(displaySettings.STEP_DISPLAY_SETTINGS_KEY)
+    ]);
+    const currentDisplay = displaySettings.normalize(storedDisplay[displaySettings.STEP_DISPLAY_SETTINGS_KEY]);
     return new Promise(resolve => {
       const overlay = document.createElement("div");
       overlay.className = "confirm-overlay";
@@ -42,12 +45,20 @@
             <p class="capture-settings-hint">${escapeHtml(t(
               "captureScreenshotsHint",
               [],
-              "关闭后不会附加调试器、不会抓取任何画面：内存和 CPU 占用最低，Chrome 也不会再显示“正在调试此浏览器”。"
+              "关闭后不采集或保存截图，操作步骤和浏览器可访问性信息仍会记录；Chrome 仍可能显示调试提示。"
+            ))}</p>
+            <label class="capture-screenshots-toggle">
+              <input type="checkbox" id="sidebar-screenshots-expanded">
+              <span>${escapeHtml(t("sidebarScreenshotsExpanded", [], "侧边栏截图默认展开"))}</span>
+            </label>
+            <p class="capture-settings-hint">${escapeHtml(t(
+              "sidebarScreenshotsExpandedHint", [],
+              "关闭后，侧边栏截图默认折叠，可逐步展开查看。保存后立即生效，不影响截图采集、保存和导出。"
             ))}</p>
             <p class="capture-settings-footnote">${escapeHtml(t(
               "captureSettingsFootnote",
               [],
-              "截图始终按标签页当前的原生分辨率保存，不做缩放。内存开销随步骤数增长，与录制时长基本无关。修改在下次开始或继续录制时生效，不影响正在进行的录制。"
+              "截图始终按标签页当前的原生分辨率保存，不做缩放。截图采集设置在下次开始或继续录制时生效；侧边栏显示设置保存后立即生效。"
             ))}</p>
           </div>
           <div class="confirm-actions">
@@ -58,12 +69,28 @@
 
       const toggle = overlay.querySelector("#capture-screenshots-enabled");
       toggle.checked = current.screenshots;
+      const expandedToggle = overlay.querySelector("#sidebar-screenshots-expanded");
+      expandedToggle.checked = currentDisplay.screenshotsExpanded;
 
+      let finishing = false;
       const finish = async saved => {
-        document.removeEventListener("keydown", onKeyDown);
-        overlay.remove();
-        if (saved) await settings.writeCaptureSettings({ screenshots: toggle.checked });
-        resolve(saved);
+        if (finishing) return;
+        finishing = true;
+        const submit = overlay.querySelector(".confirm-submit");
+        submit.disabled = true;
+        try {
+          if (saved) await chrome.storage.local.set({
+            [settings.CAPTURE_SETTINGS_KEY]: settings.normalizeCaptureSettings({ screenshots: toggle.checked }),
+            [displaySettings.STEP_DISPLAY_SETTINGS_KEY]: displaySettings.normalize({ screenshotsExpanded: expandedToggle.checked })
+          });
+          document.removeEventListener("keydown", onKeyDown);
+          overlay.remove();
+          resolve(saved);
+        } catch (error) {
+          finishing = false;
+          submit.disabled = false;
+          globalThis.RecorderDialogs.reportError(error.message);
+        }
       };
       const onKeyDown = event => {
         if (event.key === "Escape") finish(false);

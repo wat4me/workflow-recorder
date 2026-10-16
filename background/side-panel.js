@@ -13,7 +13,7 @@
 import "../shared/protocol.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
-import { ensureContentScripts } from "./recording/injection.js";
+import { ensurePageFitScript } from "./recording/injection.js";
 
 const LAYOUT_PORT_NAME = "side-panel-layout";
 const PANEL_PATH = "ui/popup.html";
@@ -45,25 +45,22 @@ export function createSidePanelController({ isRecordableTab }) {
     });
     const openPanel = chrome.sidePanel.open({ tabId: tab.id });
 
-    const preparePage = ensureContentScripts(tab.id).catch(error => {
-      console.warn(`[Background] Page preparation failed for tab ${tab.id}:`, error.message);
-    });
-    Promise.all([ready, configurePanel, openPanel, preparePage]).catch(error => {
+    // The panel's layout handshake prepares the top frame once it is ready.
+    Promise.all([ready, configurePanel, openPanel]).catch(error => {
       console.error(`[Background] Failed to open side panel for tab ${tab.id}:`, error);
     });
   }
 
   /**
    * Brings the panel up on a tab the user picked in the workbench's
-   * continue-recording dialog: the page has to be instrumented first, or the
-   * panel opens onto a tab that cannot record.
+   * continue-recording dialog. Full recording injection belongs to session start.
    */
   async function prepareForTab(tabId) {
     if (!Number.isInteger(tabId)) return { success: false, error: "Invalid target tab" };
     const tab = await chrome.tabs.get(tabId);
     if (!isRecordableTab(tab)) return { success: false, error: "目标页面不可录制" };
     await chrome.sidePanel.setOptions({ tabId, path: PANEL_PATH, enabled: true });
-    await ensureContentScripts(tabId);
+    await ensurePageFitScript(tabId);
     await chrome.tabs.update(tabId, { active: true });
     await chrome.sidePanel.open({ tabId });
     return { success: true, tabId, windowId: tab.windowId };
@@ -85,7 +82,7 @@ export function createSidePanelController({ isRecordableTab }) {
     try {
       const tab = await chrome.tabs.get(tabId);
       if (!isRecordableTab(tab) || tab.windowId !== windowId) return { success: false };
-      await ensureContentScripts(tabId);
+      await ensurePageFitScript(tabId);
       layoutTabs.set(windowId, tabId);
       await chrome.tabs.sendMessage(tabId, { action: MESSAGE.setPageFit, enabled: true });
       return { success: true };

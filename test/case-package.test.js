@@ -48,6 +48,7 @@ function loadPackage(blobs = new Map()) {
     },
     RecorderMediaStore: {
       async putBlob(key, blob) { storedMedia.set(key, blob); },
+      async getBlob(key) { return storedMedia.get(key); },
       async deleteBlobs(keys) { keys.forEach(key => storedMedia.delete(key)); }
     },
     StepDocGenerator: { generate: () => "# workflow\n" }
@@ -55,7 +56,7 @@ function loadPackage(blobs = new Map()) {
   context.globalThis = context;
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "shared", "protocol.js"), "utf8"), context);
-  for (const relative of ["ui/lib/export.js", "ui/lib/case-package.js"]) {
+  for (const relative of ["ui/lib/archive-stream.js", "ui/lib/export.js", "ui/lib/case-package.js"]) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "..", relative), "utf8"), context);
   }
   return {
@@ -77,6 +78,8 @@ test("a shared parent/child package round-trips actions, lineage and deduplicate
     type: "click",
     pageName: "page1",
     screenshotBeforeKey: "shared-before",
+    screenshotBeforeHighlight: { coordinateSpace: "top-viewport", x: 20, y: 30, width: 40, height: 50,
+      viewportWidth: 1920, viewportHeight: 1080 },
     screenshotKey: "shared-after",
     screenshotStatus: "captured"
   };
@@ -129,6 +132,21 @@ test("a shared parent/child package round-trips actions, lineage and deduplicate
   assert.equal(imported[1].actions[0].id, imported[0].actions[0].id);
   assert.equal(imported[1].actions[0].screenshotKey, imported[0].actions[0].screenshotKey);
   assert.equal(harness.storedMedia.size, 2);
+  assert.deepEqual(imported[0].actions[0].screenshotBeforeHighlight, inherited.screenshotBeforeHighlight);
+});
+
+test("a validation failure rolls back streamed media staged before the manifest", async () => {
+  const harness = loadPackage();
+  const manifest = { format: "workflow-recorder-case-package", version: 1,
+    assets: [{ id: "present", path: "media/present.jpg", type: "image/jpeg" }],
+    cases: [{ id: "case", name: "Invalid", pages: [], actions: [{ id: "step", screenshotAsset: "missing" }] }] };
+  const bytes = fflate.zipSync({ "media/present.jpg": new Uint8Array([1, 2, 3]),
+    "workflow-recorder-case-package.json": fflate.strToU8(JSON.stringify(manifest)) });
+  const source = new Blob([bytes]);
+  await assert.rejects(harness.api.importCasePackage({ size: source.size,
+    slice: (...args) => source.slice(...args), arrayBuffer: () => assert.fail("whole-file read") }), /有效的流程录制用例包/);
+  assert.equal(harness.storedMedia.size, 0);
+  assert.equal(harness.importedCases(), null);
 });
 
 test("buildCasePackage returns the archive without starting a browser download", async () => {

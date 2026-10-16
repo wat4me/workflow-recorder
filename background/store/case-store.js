@@ -376,18 +376,19 @@ export async function removeFolder(folderId) {
 }
 
 /** Moves existing cases to one folder, or removes their folder when folderId is null. */
-export async function moveCasesToFolder(caseIds, folderId) {
+export async function moveCasesToFolder(caseIds, folderId, { namesById = new Map(), extraWrites = {} } = {}) {
   const ids = new Set(caseIds || []);
   const index = await readIndex();
   let movedCount = 0;
   const nextIndex = index.map(entry => {
     if (!ids.has(entry.id) || (entry.folderId || null) === folderId) return entry;
     movedCount++;
-    if (folderId) return { ...entry, folderId };
-    const { folderId: ignored, ...unfiled } = entry;
+    const renamed = namesById.has(entry.id) ? { ...entry, name: namesById.get(entry.id) } : entry;
+    if (folderId) return { ...renamed, folderId };
+    const { folderId: ignored, ...unfiled } = renamed;
     return unfiled;
   });
-  if (movedCount > 0) await chrome.storage.local.set({ [INDEX_KEY]: nextIndex });
+  if (movedCount > 0) await chrome.storage.local.set({ ...extraWrites, [INDEX_KEY]: nextIndex });
   return movedCount;
 }
 

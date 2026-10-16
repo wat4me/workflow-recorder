@@ -57,3 +57,18 @@ test("clips partially visible targets and skips unsafe frame-local coordinates",
     coordinateSpace: "frame-viewport"
   }, 100, 100), null);
 });
+
+test("recording a before frame preserves JPEG bytes without decoding or painting", async () => {
+  const { createScreenshotManager } = await import("../background/capture/screenshots.js");
+  const previous = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = () => assert.fail("recording must not decode a before frame");
+  let stored;
+  try {
+    const manager = createScreenshotManager({ mediaStore: { putBlob: async (_, blob) => { stored = blob; } } });
+    const input = Buffer.from([255, 216, 1, 2, 255, 217]);
+    await manager.storeFrameBlob("raw", { data: input.toString("base64") }, {
+      coordinateSpace: "top-viewport", x: 10, y: 20, width: 30, height: 40, viewportWidth: 100, viewportHeight: 100
+    });
+    assert.deepEqual(Buffer.from(await stored.arrayBuffer()), input);
+  } finally { globalThis.createImageBitmap = previous; }
+});

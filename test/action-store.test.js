@@ -54,3 +54,20 @@ test("batch step deletion updates order once and removes only selected records",
     ["-action:s1", "-action:s3"]
   ]);
 });
+
+test("orphan cleanup enumerates keys without reading saved case payloads", async () => {
+  const storage = createStorage({ actionOrder: ["live"], "action:live": { id: "live" },
+    "action:orphan": { id: "orphan" }, "case:large": { actions: ["large payload"] } });
+  const get = storage.local.get;
+  storage.local.get = keys => {
+    assert.equal(keys, "actionOrder", "only the order should be deserialized");
+    return get(keys);
+  };
+  storage.local.getKeys = async () => Object.keys(storage.data);
+  globalThis.chrome = { storage };
+  const actions = await import("../background/store/actions.js");
+  assert.equal(await actions.removeOrphanActions(), 1);
+  assert.ok(storage.data["case:large"]);
+  assert.ok(storage.data["action:live"]);
+  assert.equal(storage.data["action:orphan"], undefined);
+});

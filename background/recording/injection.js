@@ -33,6 +33,14 @@ export const INJECTION_BATCHES = [
   ]
 ];
 
+/** Side-panel layout must not instrument every iframe before recording starts. */
+export async function ensurePageFitScript(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    files: ["shared/protocol.js", "content/page-fit.js"]
+  });
+}
+
 /**
  * Injects the recorder into every frame of a tab and confirms it responds.
  *

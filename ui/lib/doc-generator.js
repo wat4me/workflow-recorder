@@ -39,6 +39,10 @@ const StepDocGenerator = {
     lines.push(`Time: ${this.formatTimestamp(actions[0].timestamp)} · Steps: ${actions.length} · Pages: ${pages.length}`);
     lines.push("");
 
+    if (actions.some(action => action.accessibility || action.sourceAccessibility)) {
+      lines.push("AX context is browser-computed evidence captured near the event; state may reflect immediate page updates. Re-resolve targets on the current page using AX and DOM context.");
+      lines.push("");
+    }
     pages.forEach(p => {
       p.visits.forEach((visit, index) => {
         const title = visit.title ? ` "${this.clean(visit.title, 120)}"` : "";
@@ -75,6 +79,8 @@ const StepDocGenerator = {
       if (action.screenshotErrorReason === PAGE_CLOSED_REASON) {
         lines.push("   page closed after this step");
       }
+      if (action.frameClosedAfterClick) lines.push("   source iframe closed after this step");
+      if (action.frameNavigatedAfterClick) lines.push("   source iframe navigated after this step");
 
       const url = action.url || "";
       // Lifecycle steps already print their URL in the step line itself.
@@ -118,12 +124,49 @@ const StepDocGenerator = {
     ].join("\n");
   },
 
+  buildAXLines(ax, label = "AX context (browser-computed)") {
+    if (!ax) return [];
+    if (ax.status === "unavailable") {
+      const diagnostics = ax.reason === "timeout" && ax.diagnostics;
+      return [`${label}: unavailable (${this.clean(ax.reason || "unknown", 60)}); use DOM context.`,
+        ...(diagnostics ? [`AX timeout detail: ${JSON.stringify({
+          stage: this.clean(diagnostics.stage || "unknown", 80),
+          contextsTried: Number(diagnostics.contextsTried) || 0,
+          elapsedMs: Number(diagnostics.elapsedMs) || 0
+        })}`] : [])];
+    }
+    const safeValue = value => typeof value === "string" ? this.clean(value, 300) : value;
+    const node = item => JSON.stringify({ role: this.clean(item.role || "", 80), name: this.clean(item.name || "", 300),
+      ...(item.description ? { description: this.clean(item.description, 300) } : {}),
+      ...(item.value !== undefined && ["string", "number", "boolean"].includes(typeof item.value) ? { value: safeValue(item.value) } : {}),
+      properties: Object.fromEntries(Object.entries(item.properties || {}).slice(0, 16)
+        .filter(([, value]) => ["string", "number", "boolean"].includes(typeof value))
+        .map(([key, value]) => [this.clean(key, 40), safeValue(value)])) });
+    if (ax.status === "ignored") {
+      const related = ax.relatedAncestor;
+      return [`${label}: target is ignored by the browser accessibility tree; use DOM context.`,
+        ...(related ? [`AX related ancestor (${related.distance} level(s) above target; not the clicked node): ${node(related)}`] : [])];
+    }
+    return [`${label}: ${node(ax)}`,
+      ...(ax.ancestors || []).slice(0, 3).filter(item => !item.ignored
+        && (item.name || (item.role && !["none", "generic", "RootWebArea"].includes(item.role))))
+        .map(item => `AX ancestor: ${node(item)}`)];
+  },
+
   /**
    * Describes a single action for step cards in popup / console UI.
    * @param {Object} action
    * @returns {{desc: string, detail: string, context: string[]}}
    */
   describeStep(action) {
+    const step = this.describeDOMStep(action);
+    const hit = action.hitTarget;
+    const hitLines = hit ? [`recorded hit: ${this.renderTag(hit)}; interaction target is ${hit.ancestorDistance} level(s) above the hit node.`] : [];
+    return { ...step, context: [...hitLines, ...(step.context || []), ...this.buildAXLines(action.accessibility),
+      ...this.buildAXLines(action.sourceAccessibility, "AX source (browser-computed)")] };
+  },
+
+  describeDOMStep(action) {
     const target = action.target || {};
     const hasTarget = !!(action.target && (action.target.tagName || action.target.outerHTML));
     const tag = this.renderTag(target);
@@ -324,8 +367,9 @@ const StepDocGenerator = {
     const parts = [];
 
     if (target.id) parts.push(`id="${this.clean(target.id, 60)}"`);
-    if (target.className) {
-      const cls = target.className.toString().split(/\s+/).slice(0, 3).join(" ");
+    const className = typeof target.className === "string" ? target.className : target.className?.baseVal;
+    if (typeof className === "string") {
+      const cls = className.split(/\s+/).slice(0, 3).join(" ");
       if (cls) parts.push(`class="${this.clean(cls, 100)}"`);
     }
     if (target.name) parts.push(`name="${this.clean(target.name, 60)}"`);
@@ -436,6 +480,30 @@ const StepDocGenerator = {
 
     if (!target) return lines;
 
+    // These maps survive HTML truncation. Test hooks and accessible labels take
+    // priority over incidental data attributes, with a bounded output budget.
+    const preferred = ["data-testid", "data-test-id", "data-test", "data-qa", "data-cy",
+      "aria-label", "aria-labelledby", "aria-controls", "aria-owns"];
+    const rank = key => {
+      const index = preferred.indexOf(key);
+      return index < 0 ? preferred.length : index;
+    };
+    const entries = Object.entries({ ...target.dataAttributes, ...target.ariaAttributes })
+      .filter(([key, value]) => /^(data|aria)-[\w-]+$/.test(key) && typeof value === "string" && value.trim())
+      .sort(([a], [b]) => rank(a) - rank(b));
+    const attributes = {};
+    let budget = 1200;
+    for (const [key, value] of entries) {
+      const safeKey = this.clean(key, 80);
+      const safeValue = this.clean(value, 200);
+      const size = JSON.stringify([safeKey, safeValue]).length;
+      if (size > budget) continue;
+      attributes[safeKey] = safeValue;
+      budget -= size;
+      if (Object.keys(attributes).length >= 12) break;
+    }
+    if (Object.keys(attributes).length) lines.push(`DOM attribute hints: ${JSON.stringify(attributes)}`);
+
     if (!hasSemantic && target.nearbyTexts && target.nearbyTexts.length > 0) {
       const preview = target.nearbyTexts.slice(0, 3).map(t => `"${this.clean(t, 60)}"`).join(", ");
       lines.push(`nearby text: ${preview}`);
@@ -462,8 +530,11 @@ const StepDocGenerator = {
     const lines = chain.map((p, i) => "  ".repeat(i) + (p.openTag || `<${p.tagName || "div"}>`));
 
     const indent = "  ".repeat(chain.length);
-    const own = this.clean(target.outerHTML || this.renderTag(target), 320);
-    lines.push(`${indent}${own}  <!-- target -->`);
+    const snapshot = this.clean(target.outerHTML || this.renderTag(target), 321);
+    const truncated = snapshot.length > 320;
+    // Use a complete opening tag rather than cutting an attribute in half.
+    const own = truncated ? this.clean(target.openTag || this.renderTag(target), 4096) : snapshot;
+    lines.push(`${indent}${own}  <!-- target -->${truncated ? "  <!-- HTML snapshot truncated -->" : ""}`);
 
     return lines;
   },

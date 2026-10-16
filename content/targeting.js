@@ -55,35 +55,35 @@
   }
 
   function getInteractableTarget(element) {
-    if (!element) return null;
+    if (!(element instanceof Element)) return null;
     let current = element;
-    while (current && current !== document.body && current.parentElement) {
+    let pointerTarget = null;
+    while (current && current !== document.body && current !== document.documentElement) {
       const tag = current.tagName.toUpperCase();
-      const role = current.getAttribute("role");
-      const cursorStyle = window.getComputedStyle(current).cursor;
+      const role = (current.getAttribute("role") || "").trim().toLowerCase();
       if (
-        ["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT"].includes(tag) ||
-        ["button", "link", "checkbox", "radio", "tab"].includes(role) ||
+        ["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT", "OPTION", "SUMMARY", "LABEL", "CANVAS"].includes(tag) ||
+        ["button", "link", "checkbox", "radio", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "switch", "slider"].includes(role) ||
         current.hasAttribute("onclick") ||
-        cursorStyle === "pointer"
+        current.isContentEditable
       ) return current;
+      // Cursor is inherited by icons and labels. Keep it as a fallback while
+      // looking for an explicit control; prefer the root of a pointer subtree.
+      if (window.getComputedStyle(current).cursor === "pointer") {
+        if (!pointerTarget || window.getComputedStyle(current.parentElement || current).cursor !== "pointer") {
+          pointerTarget = current;
+        }
+      }
       current = current.parentElement;
     }
-    return element;
+    return pointerTarget || element;
   }
 
   function isMeaningfulClickTarget(element) {
-    if (!element || element === document.body || element === document.documentElement) return false;
-    const tag = element.tagName.toUpperCase();
-    const role = (element.getAttribute("role") || "").toLowerCase();
-    const cursor = window.getComputedStyle(element).cursor;
-    return (
-      ["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT", "OPTION", "SUMMARY", "LABEL", "CANVAS"].includes(tag) ||
-      ["button", "link", "checkbox", "radio", "tab", "menuitem", "option", "switch", "slider"].includes(role) ||
-      element.hasAttribute("onclick") ||
-      element.hasAttribute("contenteditable") ||
-      cursor === "pointer"
-    );
+    // JS-bound controls can have no role, inline handler or pointer cursor.
+    // Admit the element as a candidate; the worker still requires an observed
+    // effect before it stores the click. Page roots remain excluded.
+    return element instanceof Element && element !== document.body && element !== document.documentElement;
   }
 
   function isRecordableTextInput(element) {

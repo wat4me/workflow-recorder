@@ -11,7 +11,9 @@ export function registerBrowserEventHandlers({
   scope,
   screencast,
   screenshots,
-  sidePanel
+  sidePanel,
+  drafts,
+  queueRecordingTransition
 }) {
   const keepalivePorts = new Set();
 
@@ -42,9 +44,13 @@ export function registerBrowserEventHandlers({
     screenshots.markContextClosed(tabId);
     screencast.stop(tabId).catch(() => {});
     queueAction(() => scope.forgetTab(tabId)).catch(() => {});
+    if (drafts) queueRecordingTransition(() => drafts.unbind(tabId)).catch(() => {});
   });
 
   chrome.windows.onRemoved.addListener(windowId => screenshots.markContextClosed(null, windowId));
+  chrome.runtime.onStartup?.addListener(() => {
+    if (drafts) queueRecordingTransition(() => drafts.unbind()).catch(() => {});
+  });
 
   chrome.webNavigation.onDOMContentLoaded.addListener(async details => {
     if (!/^(https?|file):/i.test(details.url || "") || details.url.startsWith(chrome.runtime.getURL(""))) return;
@@ -65,7 +71,7 @@ export function registerBrowserEventHandlers({
     // Re-attaching after a navigation happens for every page of a recording, so it
     // has to honour the session's capture policy too.
     const capturePlan = await readRecordingCapturePlan();
-    if (capturePlan.screenshots && !screencast.has(details.tabId)) {
+    if (!screencast.has(details.tabId)) {
       screencast.start(details.tabId, capturePlan).catch(error => {
         console.warn(`[Screencast] Failed to start after navigation in tab ${details.tabId}:`, error.message);
       });

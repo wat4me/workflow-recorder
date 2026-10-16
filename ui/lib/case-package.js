@@ -34,22 +34,22 @@
 
   /** Exports selected saved cases with their actions, lineage and image blobs. */
   async function exportCasePackage(cases, archiveName) {
-    const archive = await buildCasePackage(cases);
+    const archive = await buildCasePackage(cases, { asBlob: true });
     if (!archive) return;
     const fallbackName = cases.length === 1
       ? cases[0].name
       : t("sharedCasePackage", [], "共享用例包");
     triggerDownload(
-      new Blob([archive], { type: "application/zip" }),
+      archive,
       `${sanitizeExportName(archiveName || fallbackName)}.swrcase`
     );
   }
 
-  async function buildCasePackage(cases) {
+  async function buildCasePackage(cases, { asBlob = false } = {}) {
     const selected = (cases || []).filter(item => Array.isArray(item?.actions));
     if (selected.length === 0) return null;
 
-    const files = {};
+    const writer = globalThis.RecorderArchiveStream.createWriter();
     const assets = [];
     const assetBySourceKey = new Map();
 
@@ -71,58 +71,46 @@
         assetId = `asset-${String(assets.length + 1).padStart(6, "0")}`;
         const type = /^image\/(?:jpeg|png|webp)$/.test(blob.type) ? blob.type : "image/jpeg";
         const path = `media/${assetId}.${extensionFor(type)}`;
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        files[path] = bytes;
-        assets.push({ id: assetId, path, type, size: bytes.byteLength });
+        await writer.add(path, blob);
+        assets.push({ id: assetId, path, type, size: blob.size });
         assetBySourceKey.set(sourceKey, assetId);
       }
       action[assetField] = assetId;
     }
 
-    const packagedCases = [];
-    for (const source of selected) {
-      const actions = [];
-      for (const sourceAction of source.actions) {
-        const action = structuredClone(sourceAction);
-        await attachAsset(action, "screenshotBeforeKey", "screenshotBeforeAsset");
-        await attachAsset(action, "screenshotKey", "screenshotAsset");
-        actions.push(action);
-      }
-      packagedCases.push({
-        id: String(source.id || `case-${packagedCases.length + 1}`),
-        name: String(source.name || t("unnamedCase", [], "未命名用例")).slice(0, 120),
-        createdAt: Number(source.createdAt) || Date.now(),
-        lineage: source.lineage || null,
-        pages: Array.isArray(source.pages) ? structuredClone(source.pages) : [],
-        actions
-      });
-    }
-
-    const manifest = {
-      format: FORMAT,
-      version: VERSION,
-      appVersion: chrome.runtime.getManifest().version,
-      exportedAt: new Date().toISOString(),
-      cases: packagedCases,
-      assets
-    };
-    files[MANIFEST_PATH] = globalThis.fflate.strToU8(JSON.stringify(manifest, null, 2));
-    return globalThis.fflate.zipSync(files, { level: 6 });
-  }
-
-  function unpackArchive(bytes) {
-    let entryCount = 0;
-    let unpackedBytes = 0;
-    return globalThis.fflate.unzipSync(bytes, {
-      filter(entry) {
-        entryCount++;
-        unpackedBytes += Number(entry.originalSize) || 0;
-        if (entryCount > MAX_ENTRIES || unpackedBytes > MAX_UNPACKED_BYTES) {
-          throw packageError("errorCasePackageTooLarge", "用例包过大，无法导入");
+    try {
+      const packagedCases = [];
+      for (const source of selected) {
+        const actions = [];
+        for (const sourceAction of source.actions) {
+          const action = structuredClone(sourceAction);
+          await attachAsset(action, "screenshotBeforeKey", "screenshotBeforeAsset");
+          await attachAsset(action, "screenshotKey", "screenshotAsset");
+          actions.push(action);
         }
-        return entry.name === MANIFEST_PATH || entry.name === LEGACY_MANIFEST_PATH || /^media\/[a-z0-9._-]+$/i.test(entry.name);
+        packagedCases.push({
+          id: String(source.id || `case-${packagedCases.length + 1}`),
+          name: String(source.name || t("unnamedCase", [], "未命名用例")).slice(0, 120),
+          createdAt: Number(source.createdAt) || Date.now(),
+          lineage: source.lineage || null,
+          pages: Array.isArray(source.pages) ? structuredClone(source.pages) : [],
+          actions
+        });
       }
-    });
+
+      const manifest = {
+        format: FORMAT,
+        version: VERSION,
+        appVersion: chrome.runtime.getManifest().version,
+        exportedAt: new Date().toISOString(),
+        cases: packagedCases,
+        assets
+      };
+      await writer.add(MANIFEST_PATH, globalThis.fflate.strToU8(JSON.stringify(manifest)), true);
+      const archive = writer.finish();
+      // Keep the programmatic byte-array API; browser downloads use Blob directly.
+      return asBlob ? archive : new Uint8Array(await archive.arrayBuffer());
+    } catch (error) { writer.abort(); throw error; }
   }
 
   function parseManifest(files) {
@@ -152,13 +140,12 @@
         !asset || typeof asset.id !== "string" || assetsById.has(asset.id) ||
         !/^media\/[a-z0-9._-]+$/i.test(asset.path || "") ||
         !/^image\/(?:jpeg|png|webp)$/.test(asset.type || "") ||
-        !files[asset.path] || files[asset.path].byteLength > MAX_ASSET_BYTES
+        !files[asset.path] || files[asset.path].size > MAX_ASSET_BYTES
       ) {
         throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
       }
       assetsById.set(asset.id, {
-        key: `import:${stamp}:${asset.id}`,
-        bytes: files[asset.path],
+        key: files[asset.path].key,
         type: asset.type
       });
     }
@@ -265,14 +252,34 @@
     if (!file || file.size <= 0) throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
     if (file.size > MAX_ARCHIVE_BYTES) throw packageError("errorCasePackageTooLarge", "用例包过大，无法导入");
 
-    const files = unpackArchive(new Uint8Array(await file.arrayBuffer()));
-    const prepared = prepareImport(parseManifest(files), files);
+    const files = Object.create(null);
     const stagedKeys = [];
+    const stamp = uniqueToken();
     try {
+      await globalThis.RecorderArchiveStream.readEntries(file, {
+        maxEntries: MAX_ENTRIES, maxBytes: MAX_UNPACKED_BYTES, maxEntryBytes: MAX_ASSET_BYTES,
+        keep: name => name === MANIFEST_PATH || name === LEGACY_MANIFEST_PATH || /^media\/[a-z0-9._-]+$/i.test(name),
+        onEntry: async (name, blob) => {
+          if (name === MANIFEST_PATH || name === LEGACY_MANIFEST_PATH) {
+            files[name] = new Uint8Array(await blob.arrayBuffer());
+          } else {
+            const key = `import:${stamp}:asset-${stagedKeys.length + 1}`;
+            const type = name.endsWith(".png") ? "image/png" : name.endsWith(".webp") ? "image/webp" : "image/jpeg";
+            stagedKeys.push(key);
+            files[name] = { key, size: blob.size, type };
+            await globalThis.RecorderMediaStore.putBlob(key, new Blob([blob], { type }));
+          }
+        }
+      });
+      const prepared = prepareImport(parseManifest(files), files);
       for (const asset of prepared.assets) {
-        await globalThis.RecorderMediaStore.putBlob(asset.key, new Blob([asset.bytes], { type: asset.type }));
-        stagedKeys.push(asset.key);
+        const blob = await globalThis.RecorderMediaStore.getBlob(asset.key);
+        if (blob.type !== asset.type) {
+          await globalThis.RecorderMediaStore.putBlob(asset.key, new Blob([blob], { type: asset.type }));
+        }
       }
+      const retained = new Set(prepared.assets.map(asset => asset.key));
+      await globalThis.RecorderMediaStore.deleteBlobs(stagedKeys.filter(key => !retained.has(key)));
       let response = await sendRuntimeMessage({ action: MESSAGE.importCases, cases: prepared.cases }, 60000);
       if (!response?.success) {
         // If the response was lost after the atomic storage commit, do not roll
@@ -284,7 +291,7 @@
         }
       }
       if (!response?.success) throw new Error(response?.error || t("importCasesFailed", [], "导入用例失败"));
-      return { importedCount: response.importedCount || prepared.cases.length };
+      return { importedCount: response.importedCount || prepared.cases.length, renamedCount: response.renamedCount || 0 };
     } catch (error) {
       await globalThis.RecorderMediaStore.deleteBlobs(stagedKeys).catch(() => {});
       throw error;

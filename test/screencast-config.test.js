@@ -32,22 +32,24 @@ test("screenshots use pushed CDP screencast frames", () => {
   assert.doesNotMatch(sourceFiles, /captureVisibleTab|Page\.captureScreenshot/);
 });
 
-test("a recording with screenshots turned off never attaches the debugger", () => {
-  const session = fs.readFileSync(path.join(root, "background", "recording", "session.js"), "utf8");
-  const scope = fs.readFileSync(path.join(root, "background", "recording", "scope.js"), "utf8");
-  const events = fs.readFileSync(path.join(root, "background", "browser-events.js"), "utf8");
-  const actionLog = fs.readFileSync(path.join(root, "background", "recording", "action-log.js"), "utf8");
-
-  // Three places open a screencast: the session's tabs, a child tab admitted
-  // mid-recording, and a page that navigates. The stream is the whole cost of the
-  // feature, so all three have to consult the same plan -- a missed one would keep
-  // the memory (and Chrome's debugging banner) alive for recordings that opted out.
-  assert.match(session, /if \(capturePlan\.screenshots\) await screencast\.start\(tab\.id, capturePlan\)/);
-  assert.match(scope, /if \(!capturePlan\.screenshots\) return;/);
-  assert.match(events, /capturePlan\.screenshots && !screencast\.has\(details\.tabId\)/);
-  // Steps still record; they are marked as skipped so the UI can say why.
-  assert.match(actionLog, /SCREENSHOT_SKIPPED_REASON\.captureDisabled/);
-  assert.match(actionLog, /const willCapture = capturePlan\.screenshots && !payload\.screenshotSkippedReason;/);
+test("AX transport remains available when screenshot streaming is off", async () => {
+  const calls = [];
+  globalThis.chrome = { debugger: {
+    attach: async () => calls.push("attach"), detach: async () => calls.push("detach"),
+    sendCommand: async (target, method) => { calls.push(method); return {}; },
+    onEvent: { addListener() {} }, onDetach: { addListener() {} }
+  } };
+  const { createScreencastManager } = await import("../background/capture/screencast.js");
+  const manager = createScreencastManager();
+  await manager.start(42, { screenshots: false });
+  assert.equal(manager.has(42), true);
+  assert.ok(calls.includes("Runtime.enable"));
+  assert.ok(!calls.includes("Page.startScreencast"));
+  assert.equal(manager.getLatestFrame(42), null);
+  await manager.stopAll();
+  assert.ok(calls.includes("detach"));
+  assert.ok(!calls.includes("Page.stopScreencast"));
+  assert.equal(manager.has(42), false);
 });
 
 /**
