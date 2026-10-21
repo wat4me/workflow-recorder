@@ -187,3 +187,63 @@ test("a click dropped for having no effect says so, with what was observed", asy
   assert.equal(logged[0][1].target, "div");
   assert.deepEqual(storage.data.actionOrder, []);
 });
+
+test("an expired click cannot borrow a later DOM change or navigation", async () => {
+  const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+  let probes = 0;
+  chrome.tabs = { sendMessage: async () => { probes++; return { changed: true }; },
+    get: async () => ({ ...rootTab, url: "https://example.test/later" }) };
+  const result = await actionLog.logClick({ payload: { id: "expired", type: "click", url: rootTab.url, timestamp: Date.now() - 2500 } },
+    { tab: rootTab, frameId: 0 });
+  assert.equal(result.ignored, true);
+  assert.equal(probes, 1, "an old click may only read its existing page observation");
+  assert.deepEqual(storage.data.actionOrder, []);
+});
+
+test("late delivery retains a cached effect that occurred inside the original click window", async () => {
+  const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+  const clickAt = Date.now() - 2500;
+  chrome.tabs = { sendMessage: async () => ({ changed: true, observedAt: clickAt + 100 }),
+    get: async () => { throw new Error("An expired click must not probe a later navigation"); } };
+  const result = await actionLog.logClick({ payload: { id: "cached", type: "click", url: rootTab.url, timestamp: clickAt } },
+    { tab: rootTab, frameId: 0, documentId: "original-document" });
+  assert.equal(result.ignored, undefined);
+  assert.deepEqual(storage.data.actionOrder, ["cached"]);
+});
+
+test("an observed navigation is retained when a later redirect returns to the source URL", async () => {
+  const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+  let reads = 0;
+  chrome.tabs = { sendMessage: async () => { throw new Error("Document replaced"); },
+    get: async () => ++reads === 1 ? { ...rootTab, url: "https://example.test/redirect" } : rootTab };
+  const result = await actionLog.logClick({ payload: { id: "redirected", type: "click", url: rootTab.url, timestamp: Date.now() } },
+    { tab: rootTab, frameId: 0 });
+  assert.equal(result.ignored, undefined);
+  assert.deepEqual(storage.data.actionOrder, ["redirected"]);
+});
+
+test("click effects are validated before the write queue is free and commits retain input order", async () => {
+  const { actionLog, storage } = await setup({ waitForBrowserContextChange: async () => null, findBrowserContextChange: () => null });
+  const { createSerialQueue } = await import("../background/queue.js");
+  const { createApplicationRoutes } = await import("../background/routes.js");
+  const queueAction = createSerialQueue("test");
+  let release;
+  queueAction(() => new Promise(resolve => { release = resolve; }));
+  const probed = [];
+  chrome.tabs = { get: async () => rootTab, sendMessage: async (tabId, request, options) => {
+    probed.push({ clickId: request.debugClickId, options });
+    return { changed: true };
+  } };
+  const routes = createApplicationRoutes({ actionLog, queueAction, screenshots: { snapshotFrameData: () => null } });
+  const first = routes.logClickAction({ debugClickId: "first", payload: { id: "first", type: "click", url: rootTab.url, timestamp: Date.now() } },
+    { tab: rootTab, frameId: 0, documentId: "original-document" });
+  const second = routes.logClickAction({ debugClickId: "second", payload: { id: "second", type: "click", url: rootTab.url, timestamp: Date.now() } },
+    { tab: rootTab, frameId: 0, documentId: "original-document" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(probed.map(item => item.clickId), ["first", "second"]);
+  assert.deepEqual(probed[0].options, { documentId: "original-document" });
+  assert.deepEqual(storage.data.actionOrder, []);
+  release();
+  await Promise.all([first, second]);
+  assert.deepEqual(storage.data.actionOrder, ["first", "second"]);
+});

@@ -1,9 +1,11 @@
 import * as actionStore from "./actions.js";
-import { screenshotKeysOf, readEntry } from "./case-store.js";
-import { tombstone } from "./workspace-origin.js";
+import { screenshotKeysOf, readEntry, readIndex } from "./case-store.js";
+import { savedCaseIdFor, tombstone } from "./workspace-origin.js";
 
 export const DRAFT_INDEX_KEY = "recordingDraftIndex";
 export const ACTIVE_DRAFT_KEY = "activeRecordingDraftId";
+export const MAX_UNSAVED_DRAFTS = 10;
+const PENDING_REMOVALS_KEY = "pendingRecordingDraftRemovals";
 const detailKey = id => `recordingDraft:${id}`;
 const mediaKey = id => `recordingDraftMedia:${id}`;
 const STATE_KEYS = ["isRecording", "recordingTabIds", "tabsMapping", "resumableScope", "nextPageNumber",
@@ -23,7 +25,10 @@ export async function readDraftMediaKeys() {
 /** The live workspace stays incremental; only inactive drafts store a snapshot.
  * Call activate under the recording-transition queue. Case writes are serialized
  * separately so a save/clear cannot interleave the workspace swap. */
-export function createDraftManager({ session, queueCaseWrite, drainRegistrations, notifyStepsUpdated }) {
+export function createDraftManager({ session, queueCaseWrite, drainRegistrations, notifyStepsUpdated, deleteScreenshots = async () => {} }) {
+  // Older drafts have no saved-case marker in their index. Their inactive
+  // snapshots are immutable until activated, so inspect each at most once.
+  const legacySummaries = new Map();
   async function readState() {
     return chrome.storage.local.get([...STATE_KEYS, DRAFT_INDEX_KEY, ACTIVE_DRAFT_KEY]);
   }
@@ -78,13 +83,15 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
         writes[detailKey(currentId)] = { actions, state: { ...currentState, isRecording: false, recordingTabIds: [] } };
         writes[mediaKey(currentId)] = screenshotKeysOf(actions);
         index = index.map(entry => entry.id === currentId ? { ...entry,
-          tabIds: uniqueTabs([...(entry.tabIds || []), ...scopeTabs(state)]), stepCount: actions.length, updatedAt: Date.now() } : entry);
+          tabIds: uniqueTabs([...(entry.tabIds || []), ...scopeTabs(state)]), stepCount: actions.length,
+          savedCaseId: savedCaseIdFor(state, actions), updatedAt: Date.now() } : entry);
       }
       let snapshot = null;
       if (nextId === currentId) snapshot = { actions, state: currentState };
       else if (selectedId) snapshot = (await chrome.storage.local.get(detailKey(nextId)))[detailKey(nextId)];
       if (selectedId && nextId !== currentId && !snapshot) throw new Error("草稿数据不可读取，原录制已保留");
-      if (!selectedId) index.push({ id: nextId, tabIds: [tabId], title: tab.title || tab.url, url: tab.url, stepCount: 0, updatedAt: Date.now() });
+      if (!selectedId) index.push({ id: nextId, tabIds: [tabId], title: tab.title || tab.url, url: tab.url,
+        stepCount: 0, savedCaseId: null, updatedAt: Date.now() });
       index = index.map(entry => entry.id === nextId
         ? { ...entry, tabIds: uniqueTabs([...(entry.tabIds || []), tabId]) }
         : { ...entry, tabIds: (entry.tabIds || []).filter(id => id !== tabId) });
@@ -114,7 +121,7 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
   }
 
   async function read(tabId) {
-    const state = await readState();
+    const [state, savedCases] = await Promise.all([readState(), readIndex()]);
     const index = state[DRAFT_INDEX_KEY] || [];
     const activeId = state[ACTIVE_DRAFT_KEY];
     const entry = (!Number.isInteger(tabId) ? index.find(item => item.id === activeId) : null)
@@ -127,8 +134,28 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
       const snapshot = (await chrome.storage.local.get(detailKey(entry.id)))[detailKey(entry.id)];
       actions = snapshot?.actions || []; selectedState = snapshot?.state || emptyState();
     }
+    const missing = index.filter(item => item.id !== activeId && item.stepCount > 0
+      && !Object.hasOwn(item, "savedCaseId") && !legacySummaries.has(item.id));
+    if (missing.length) {
+      const snapshots = await chrome.storage.local.get(missing.map(item => detailKey(item.id)));
+      for (const item of missing) {
+        const snapshot = snapshots[detailKey(item.id)];
+        legacySummaries.set(item.id, { stepCount: snapshot?.actions?.length || 0,
+          savedCaseId: snapshot ? savedCaseIdFor(snapshot.state || {}, snapshot.actions || []) : null });
+      }
+    }
+    const caseIds = new Set(savedCases.map(item => item.id));
+    const liveActions = entry?.id === activeId || !Number.isInteger(tabId) ? actions : await actionStore.readActions();
+    const drafts = index.map(item => {
+      const summary = item.id === activeId
+        ? { stepCount: liveActions.length, savedCaseId: savedCaseIdFor(state, liveActions) }
+        : Object.hasOwn(item, "savedCaseId") ? item : legacySummaries.get(item.id) || item;
+      const stepCount = Number(summary.stepCount) || 0;
+      return { ...item, stepCount,
+        hasUnsavedChanges: stepCount > 0 && (!summary.savedCaseId || !caseIds.has(summary.savedCaseId)) };
+    });
     return { success: true, actions, state: selectedState, draftId: entry?.id || null,
-      active: entry?.id === activeId, drafts: index.map(item => ({ ...item, stepCount: item.id === entry?.id ? actions.length : item.stepCount })) };
+      active: entry?.id === activeId, drafts };
   }
 
   async function assertActive(id) {
@@ -136,6 +163,53 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
     if ((await chrome.storage.local.get(ACTIVE_DRAFT_KEY))[ACTIVE_DRAFT_KEY] !== id) {
       throw new Error("当前草稿已切换，请回到目标页面重新打开侧边栏后重试");
     }
+  }
+
+  async function finishPendingRemovals(stored) {
+    const pending = stored[PENDING_REMOVALS_KEY] || [];
+    if (!pending.length) return;
+    const protectedIds = new Set((stored[DRAFT_INDEX_KEY] || []).map(entry => entry.id));
+    protectedIds.add(stored[ACTIVE_DRAFT_KEY]);
+    const removed = pending.filter(entry => !protectedIds.has(entry.id));
+    if (removed.length) {
+      await chrome.storage.local.remove(removed.flatMap(entry => [detailKey(entry.id), mediaKey(entry.id)]));
+      // Reference-aware cleanup also protects screenshots shared with another
+      // recording or a saved case. Run after dropping the draft references.
+      await deleteScreenshots(removed.flatMap(entry => entry.screenshotKeys || []));
+      for (const entry of removed) legacySummaries.delete(entry.id);
+    }
+    await chrome.storage.local.set({ [PENDING_REMOVALS_KEY]: [] });
+  }
+
+  /** Call under the recording-transition queue; case writes cannot interleave. */
+  function enforceLimit() {
+    return queueCaseWrite(async () => {
+      const stored = await chrome.storage.local.get([DRAFT_INDEX_KEY, ACTIVE_DRAFT_KEY, PENDING_REMOVALS_KEY]);
+      await finishPendingRemovals(stored);
+      if ((stored[DRAFT_INDEX_KEY] || []).length <= MAX_UNSAVED_DRAFTS) return { discardedCount: 0 };
+      const state = await read();
+      const unsaved = state.drafts.filter(entry => entry.hasUnsavedChanges);
+      const excess = unsaved.length - MAX_UNSAVED_DRAFTS;
+      if (excess <= 0) return { discardedCount: 0 };
+      // Drafts are appended once and keep their creation order when restored.
+      // Protect the open workspace even if it is the oldest recording.
+      const removed = unsaved.filter(entry => entry.id !== state.draftId).slice(0, excess);
+      const removedIds = new Set(removed.map(entry => entry.id));
+      const snapshots = await chrome.storage.local.get(removed.flatMap(entry => [detailKey(entry.id), mediaKey(entry.id)]));
+      const pending = removed.map(entry => ({ id: entry.id,
+        screenshotKeys: [...new Set([
+          ...(snapshots[mediaKey(entry.id)] || []),
+          ...screenshotKeysOf(snapshots[detailKey(entry.id)]?.actions)
+        ])] }));
+      const index = (stored[DRAFT_INDEX_KEY] || []).filter(entry => !removedIds.has(entry.id));
+      // Commit the new index before removing any content. Remember enough to
+      // finish both record and media cleanup if the worker stops between writes.
+      await chrome.storage.local.set({ [DRAFT_INDEX_KEY]: index, [PENDING_REMOVALS_KEY]: pending });
+      notifyStepsUpdated();
+      await finishPendingRemovals({ [DRAFT_INDEX_KEY]: index, [ACTIVE_DRAFT_KEY]: state.draftId,
+        [PENDING_REMOVALS_KEY]: pending });
+      return { discardedCount: removed.length };
+    });
   }
 
   async function unbind(tabId = null) {
@@ -147,5 +221,5 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
         ...(tabId === null ? { resumableScope: null, recordingTabIds: [], isRecording: false, tabsMapping: {} } : {}) });
     });
   }
-  return { activate, read, assertActive, unbind };
+  return { activate, read, assertActive, unbind, enforceLimit };
 }

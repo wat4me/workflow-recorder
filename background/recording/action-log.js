@@ -71,7 +71,7 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
 
     const targetId = await applyStepChange(lastAction, changes);
     await chrome.storage.local.set({ activeCaseId: null });
-    if (willCapture) screenshots.schedule(targetId, senderTab, lastAction.type);
+    if (willCapture) screenshots.schedule(targetId, senderTab, lastAction.type, payload.frameId ? payload.timestamp : 0);
     return true;
   }
 
@@ -219,7 +219,9 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       throw error;
     }
     await chrome.storage.local.set({ activeCaseId: null });
-    if (willCapture) screenshots.schedule(payload.id, senderTab, payload.type);
+    // Top-document observers cannot see input/click events inside an iframe.
+    // Keep a quiet boundary for those actions even if the outer page is idle.
+    if (willCapture) screenshots.schedule(payload.id, senderTab, payload.type, frameId ? payload.timestamp : 0);
     console.log(`[Background] Action saved. Total actions: ${await actionStore.countActions()}`);
   }
 
@@ -237,12 +239,23 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     // they clicked. It stays valid even if the click closes the tab.
     const beforeFrameData = options.beforeFrameData ?? screenshots.snapshotFrameData(senderTab.id);
     const clickAt = Number(request.payload?.timestamp) || Date.now();
-    const validationDeadline = Date.now() + CLICK_EFFECT_TIMEOUT_MS;
+    const validationStartedAt = Date.now();
+    const validationDeadline = Math.min(clickAt, validationStartedAt) + CLICK_EFFECT_TIMEOUT_MS;
+    const timeRemaining = () => Math.max(0, validationDeadline - Date.now());
+    const debugDecision = (decision, evidence) => globalThis.WorkflowRecorderProtocol.recordingDebug("click-decision", {
+      clickId: request.debugClickId, tabId: senderTab.id, frameId: sender.frameId || 0,
+      target: request.payload?.target?.tagName, decision, evidence,
+      queuedMs: Math.max(0, validationStartedAt - clickAt),
+      validationMs: Date.now() - validationStartedAt
+    });
     let domChanged = false;
     let sourceFrameChange = null;
     let browserContextChange = null;
+    let interrupted = false;
+    let observedNavigation = false;
     let checkingNavigation = true;
     const sourceUrl = sender.frameId ? senderTab.url : request.payload?.url || senderTab.url;
+    const expired = timeRemaining() === 0;
     async function detectSourceFrameChange() {
       if (!sender.frameId || !chrome.webNavigation?.getAllFrames) return null;
       try {
@@ -257,7 +270,7 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     }
     async function waitForSourceFrameChange() {
       if (!sender.frameId || !chrome.webNavigation?.getAllFrames) throw new Error("No source frame to observe");
-      const deadline = Date.now() + CLICK_EFFECT_TIMEOUT_MS;
+      const deadline = validationDeadline;
       do {
         const change = await detectSourceFrameChange();
         if (change) return { sourceFrameChange: change };
@@ -266,7 +279,7 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       throw new Error("No source frame change observed");
     }
     async function waitForNavigation() {
-      const deadline = Date.now() + CLICK_EFFECT_TIMEOUT_MS;
+      const deadline = validationDeadline;
       do {
         try {
           const currentTab = await chrome.tabs.get(senderTab.id);
@@ -290,30 +303,39 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
             {
               action: MESSAGE.waitForClickEffect,
               baseline: request.effectBaseline,
-              timeoutMs: CLICK_EFFECT_TIMEOUT_MS
+              debugClickId: request.debugClickId,
+              timeoutMs: timeRemaining()
             },
-            { frameId: sender.frameId || 0 }
+            sender.documentId ? { documentId: sender.documentId } : { frameId: sender.frameId || 0 }
           ).then(result => {
+            if (result?.interrupted) return { interrupted: true };
+            // A delayed worker may read an already-completed page observation,
+            // but can never start a fresh DOM window for that old click.
+            if (expired && (!Number.isFinite(result?.observedAt) || result.observedAt < clickAt - 50 || result.observedAt > validationDeadline)) {
+              throw new Error("No in-window cached effect");
+            }
             if (!result?.changed) throw new Error("No DOM change observed");
             return { domChanged: true };
           }),
-          scope.waitForBrowserContextChange(senderTab.id, clickAt, CLICK_EFFECT_TIMEOUT_MS)
+          (expired ? Promise.resolve(null) : scope.waitForBrowserContextChange(senderTab.id, clickAt, timeRemaining()))
             .then(change => {
-              if (!change) throw new Error("No browser context change observed");
+              if (!change || (Number.isFinite(change.time) && change.time > validationDeadline)) throw new Error("No browser context change observed");
               return { browserContextChange: change };
             }),
-          waitForNavigation(),
-          waitForSourceFrameChange()
+          expired ? Promise.reject(new Error("Navigation window expired")) : waitForNavigation(),
+          expired ? Promise.reject(new Error("Frame window expired")) : waitForSourceFrameChange()
         ]);
         const outcome = await Promise.race([
           evidence,
           new Promise(resolve => {
-            effectTimer = setTimeout(() => resolve({}), CLICK_EFFECT_TIMEOUT_MS);
+            effectTimer = setTimeout(() => resolve({}), expired ? 100 : timeRemaining());
           })
         ]);
         domChanged = !!outcome.domChanged;
         sourceFrameChange = outcome.sourceFrameChange || null;
         browserContextChange = outcome.browserContextChange || null;
+        interrupted = !!outcome.interrupted;
+        observedNavigation = !!outcome.navigated;
       } catch (error) {
         // A navigation may destroy the originating frame before it responds.
       } finally {
@@ -322,19 +344,22 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       }
     }
 
-    let navigated = false;
+    let navigated = observedNavigation;
     try {
-      const currentTab = await chrome.tabs.get(senderTab.id);
-      navigated = !!currentTab.url && currentTab.url !== sourceUrl;
+      if (!interrupted && timeRemaining() > 0) {
+        const currentTab = await chrome.tabs.get(senderTab.id);
+        navigated ||= !!currentTab.url && currentTab.url !== sourceUrl;
+      }
     } catch (error) {
-      navigated = true;
+      navigated = !interrupted;
     }
 
-    browserContextChange ||= scope.findBrowserContextChange(senderTab.id, clickAt);
+    if (!interrupted) browserContextChange ||= scope.findBrowserContextChange(senderTab.id, clickAt);
+    if (Number.isFinite(browserContextChange?.time) && browserContextChange.time > validationDeadline) browserContextChange = null;
     // A final snapshot can annotate a frame close when DOM evidence won the
     // race. Keep this browser query bounded too, including for forced clicks.
     const remaining = Math.max(0, validationDeadline - Date.now());
-    if (!sourceFrameChange && sender.frameId && remaining) {
+    if (!interrupted && !sourceFrameChange && sender.frameId && remaining) {
       let frameTimer;
       try {
         sourceFrameChange = await Promise.race([detectSourceFrameChange(), new Promise(resolve => {
@@ -348,12 +373,14 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       // identical to a stray one. Report what was actually observed, so the next
       // occurrence says which signal failed to arrive instead of guessing.
       reportClickSkipped(CLICK_SKIP_REASON.noObservableEffect, {
+        clickId: request.debugClickId,
         target: request.payload?.target?.tagName || null,
         url: sourceUrl,
         domChanged,
         navigated,
         waitedMs: CLICK_EFFECT_TIMEOUT_MS
       });
+      debugDecision("filtered", { domChanged, navigated, browserContextChange: !!browserContextChange, sourceFrameChange, interrupted });
       return { success: true, ignored: true };
     }
 
@@ -364,16 +391,21 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     // capture clears the field outright. That this click opened a page is a fact
     // about the flow rather than about a screenshot, so it gets its own field --
     // the exported document needs it to name the handle the next steps run on.
-    if (browserContextChange) {
-      request.payload.screenshotSkippedReason = SCREENSHOT_SKIPPED_REASON.opensChildPage;
-      request.payload.openedChildPage = true;
-    }
-    if (sourceFrameChange === "removed") request.payload.frameClosedAfterClick = true;
-    if (sourceFrameChange === "navigated") request.payload.frameNavigatedAfterClick = true;
-
-    await log(request.payload, senderTab, { beforeFrameData, frameId: sender.frameId, documentId: sender.documentId });
-    notifyStepsUpdated();
-    return { success: true };
+    const commit = async (payload = request.payload) => {
+      if (browserContextChange) {
+        payload.screenshotSkippedReason = SCREENSHOT_SKIPPED_REASON.opensChildPage;
+        payload.openedChildPage = true;
+      }
+      if (sourceFrameChange === "removed") payload.frameClosedAfterClick = true;
+      if (sourceFrameChange === "navigated") payload.frameNavigatedAfterClick = true;
+      await log(payload, senderTab, { beforeFrameData, frameId: sender.frameId, documentId: sender.documentId });
+      debugDecision("recorded", { domChanged, navigated, browserContextChange: !!browserContextChange, sourceFrameChange,
+        forced: !!request.forceValid, forcedReason: request.forceValid
+          ? (payload.target?.tagName === "canvas" ? "canvas" : payload.target?.tagName === "a" ? "hyperlink" : "file-input-or-explicit-handler") : null });
+      notifyStepsUpdated();
+      return { success: true };
+    };
+    return options.deferCommit ? { success: true, commit } : commit();
   }
 
   async function deleteStep(index) {

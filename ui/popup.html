@@ -12,6 +12,12 @@
     <header class="app-header compact recorder-header">
       <div class="recorder-meta-row">
         <div class="header-utilities">
+          <button class="icon-btn recover-recordings-btn" id="recover-recordings-btn" type="button" hidden aria-expanded="false" aria-controls="recording-recovery-panel" title="恢复录制" aria-label="恢复录制" data-i18n-title="recoverRecordings" data-i18n-aria-label="recoverRecordings">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M3 11a9 9 0 1 1 2.6 6.4"></path><path d="M3 4v7h7"></path><path d="M12 7v5l3 2"></path>
+            </svg>
+            <span class="recorder-icon-label" data-i18n="recoverRecordings">恢复录制</span>
+          </button>
           <button class="icon-btn settings-btn" id="capture-settings-btn" type="button" title="录制设置" aria-label="录制设置" data-i18n-title="captureSettingsTitle" data-i18n-aria-label="captureSettingsTitle">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <circle cx="12" cy="12" r="3"></circle>
@@ -25,19 +31,19 @@
               <path d="M10 14L21 3"></path>
               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
             </svg>
-            <span data-i18n="workspace">工作台</span>
+            <span class="recorder-icon-label" data-i18n="workspace">工作台</span>
           </button>
         </div>
       </div>
 
       <div class="record-actions header-record-actions" aria-label="录制操作" data-i18n-aria-label="recordingActions">
-        <button id="record-btn" class="btn btn-primary start-state" disabled>
+        <button id="record-btn" class="btn btn-primary start-state" disabled title="开始录制" aria-label="开始录制">
           <span class="btn-icon">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M8 5v14l11-7z"></path>
             </svg>
           </span>
-          <span class="btn-label" id="record-btn-label" data-i18n="startRecording">开始录制</span>
+          <span class="btn-label recorder-icon-label" id="record-btn-label" data-i18n="startRecording">开始录制</span>
         </button>
         <button id="manual-screenshot-btn" class="btn btn-secondary manual-screenshot-btn" type="button" hidden disabled title="更新当前页面最后一个操作的操作后截图，不改变操作前截图" aria-label="更新操作后截图" data-i18n-title="manualScreenshotTitle" data-i18n-aria-label="manualScreenshot">
           <span class="btn-icon">
@@ -46,7 +52,7 @@
               <circle cx="12" cy="12.5" r="3.5"></circle>
             </svg>
           </span>
-          <span class="btn-label" data-i18n="manualScreenshot">更新操作后截图</span>
+          <span class="btn-label recorder-icon-label" data-i18n="manualScreenshot">更新操作后截图</span>
         </button>
         <button id="download-doc-compact-btn" class="btn btn-secondary download-doc-btn compact-download-btn" type="button" hidden disabled title="下载录制结果" aria-label="下载录制结果" data-i18n-title="exportResult" data-i18n-aria-label="exportResult">
           <span class="btn-icon">
@@ -54,10 +60,10 @@
               <path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><path d="M5 21h14"></path>
             </svg>
           </span>
-          <span class="btn-label" data-i18n="exportResult">下载录制结果</span>
+          <span class="btn-label recorder-icon-label" data-i18n="exportResult">下载录制结果</span>
         </button>
         <div class="more-actions-wrap">
-          <button id="more-actions-btn" class="icon-btn more-actions-btn" type="button" hidden aria-haspopup="menu" aria-expanded="false" aria-controls="more-actions-menu" title="更多操作" data-i18n-title="moreActions">
+          <button id="more-actions-btn" class="icon-btn more-actions-btn" type="button" hidden aria-haspopup="menu" aria-expanded="false" aria-controls="more-actions-menu" title="更多操作" aria-label="更多操作" data-i18n-title="moreActions" data-i18n-aria-label="moreActions">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle>
             </svg>
@@ -75,14 +81,20 @@
     </header>
 
     <main class="app-main">
-      <div class="draft-toolbar" hidden>
-        <label for="recording-draft-select" data-i18n="currentDraft">当前草稿</label>
-        <select id="recording-draft-select" aria-label="当前草稿" data-i18n-aria-label="currentDraft"></select>
-        <span id="recording-draft-status"></span>
-      </div>
+      <section id="recording-recovery-panel" class="recording-recovery-panel" hidden aria-labelledby="recording-recovery-title">
+        <div class="recording-recovery-head">
+          <h2 id="recording-recovery-title" data-i18n="recoverRecordings">恢复录制</h2>
+          <button id="close-recording-recovery-btn" class="recording-recovery-close" type="button" title="关闭恢复录制列表" aria-label="关闭恢复录制列表" data-i18n-title="closeRecordingRecovery" data-i18n-aria-label="closeRecordingRecovery">
+            <span class="recorder-icon-label" data-i18n="close">关闭</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+          </button>
+        </div>
+        <p data-i18n="recoverRecordingsHint">点击下方录制即可恢复，当前内容会自动保留。未保存录制最多保留 10 份，超出后淘汰最早创建的历史录制。</p>
+        <div id="recording-recovery-list" class="recording-recovery-list"></div>
+      </section>
       <section class="case-actionbar" aria-label="用例操作" data-i18n-aria-label="caseActions">
         <div class="case-action-buttons">
-          <button id="save-current-case-btn" class="btn btn-secondary" disabled>
+          <button id="save-current-case-btn" class="btn btn-secondary" disabled title="保存用例" aria-label="保存用例" data-i18n-title="saveCaseAction" data-i18n-aria-label="saveCaseAction">
             <span class="btn-icon">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1 2 2z"></path>
@@ -93,7 +105,7 @@
             <span class="btn-label" data-i18n="saveCaseAction">保存用例</span>
           </button>
           <div class="copy-task-control">
-            <button id="copy-task-btn" class="btn btn-accent" disabled aria-describedby="copy-task-tooltip">
+            <button id="copy-task-btn" class="btn btn-accent" disabled aria-describedby="copy-task-tooltip" title="复制给AI" aria-label="复制给AI" data-i18n-title="copyForAI" data-i18n-aria-label="copyForAI">
               <span class="btn-icon">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <rect x="9" y="9" width="11" height="11" rx="2"></rect>
@@ -121,9 +133,14 @@
              kind of action from deleting a selection, so it reads as the quiet
              control at the far left instead of a second peer button. -->
         <div class="step-batch-actions">
-          <button class="step-clear-btn" id="clear-steps-btn" type="button" disabled data-i18n="clearSteps">清空步骤</button>
-          <button class="btn btn-danger step-batch-delete" id="batch-delete-steps-btn" type="button" disabled data-i18n="deleteSelectedSteps">删除所选</button>
-          <label class="selection-control step-select-all"><input class="selection-checkbox" type="checkbox" id="step-select-all"><span data-i18n="selectAll">全选</span></label>
+          <button class="step-clear-btn" id="clear-steps-btn" type="button" disabled title="清空步骤" aria-label="清空步骤" data-i18n-title="clearSteps" data-i18n-aria-label="clearSteps">
+            <span data-i18n="clearSteps">清空步骤</span>
+          </button>
+          <button class="btn btn-danger step-batch-delete" id="batch-delete-steps-btn" type="button" disabled title="删除所选" aria-label="删除所选" data-i18n-title="deleteSelectedSteps" data-i18n-aria-label="deleteSelectedSteps">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6"></path></svg>
+            <span class="recorder-icon-label" data-i18n="deleteSelectedSteps">删除所选</span>
+          </button>
+          <label class="selection-control step-select-all" title="全选" data-i18n-title="selectAll"><input class="selection-checkbox" type="checkbox" id="step-select-all" aria-label="全选" data-i18n-aria-label="selectAll"><span class="recorder-icon-label" data-i18n="selectAll">全选</span></label>
         </div>
       </div>
 

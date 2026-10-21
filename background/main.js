@@ -38,8 +38,11 @@ import { createCaseStoreCoordinator } from "./store/case-migration.js";
 import { createCaseManager } from "./store/cases.js";
 import { createMediaCleanupManager } from "./store/media-cleanup.js";
 import { createDraftManager } from "./store/drafts.js";
+import { createRecordingDebugStore } from "./store/recording-debug.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
+const recordingDebug = createRecordingDebugStore();
+globalThis.WorkflowRecorderProtocol.setRecordingDebugSink(recordingDebug.append);
 
 // --- Queues -----------------------------------------------------------------
 // Action writes read-modify-write shared storage keys, so they are serialized.
@@ -107,7 +110,8 @@ const session = createRecordingSession({
 
 const sidePanel = createSidePanelController({ isRecordableTab: scope.isRecordableTab });
 const drafts = createDraftManager({ session, queueCaseWrite,
-  drainRegistrations: () => queueTabRegistration.drain(), notifyStepsUpdated });
+  drainRegistrations: () => queueTabRegistration.drain(), notifyStepsUpdated,
+  deleteScreenshots: keys => mediaCleanup.deleteUnreferenced(keys) });
 
 // --- Startup ----------------------------------------------------------------
 registerInstallHandler();
@@ -132,6 +136,7 @@ storeReady.then(async () => {
   // delete. Nothing else would ever reclaim those records.
   const removed = await caseStore.flushPendingRemovals();
   if (removed > 0) console.log(`[Case Store] Removed ${removed} orphaned case record(s).`);
+  await queueRecordingTransition(() => drafts.enforceLimit());
   await mediaCleanup.cleanupOrphans();
 }).catch(error => {
   console.warn("[Case Store] Startup cleanup failed:", error.message);
@@ -155,6 +160,7 @@ screenshots.recoverInterruptedJobs().then(count => {
 
 // --- Runtime boundaries -----------------------------------------------------
 registerMessageRouter(createApplicationRoutes({
+  recordingDebug,
   accessibility,
   actionLog,
   actionStore,

@@ -17,11 +17,40 @@ export function registerBrowserEventHandlers({
 }) {
   const keepalivePorts = new Set();
 
+  if (drafts) {
+    let retentionQueued = false;
+    let retentionRequested = false;
+    const requestRetention = () => {
+      retentionRequested = true;
+      if (retentionQueued) return;
+      retentionQueued = true;
+      // Never make an action write await a recording transition: stop already
+      // waits for action writes to drain. Coalesce notifications without losing
+      // changes that arrive while the previous retention pass is running.
+      queueRecordingTransition(async () => {
+        retentionRequested = false;
+        await drafts.enforceLimit();
+      }).catch(error => {
+        console.warn("[Drafts] Retention cleanup failed:", error.message);
+      }).finally(() => {
+        retentionQueued = false;
+        if (retentionRequested) requestRetention();
+      });
+    };
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && (changes.recordingDraftIndex || changes.activeRecordingDraftId
+          || changes.actionOrder || changes.activeCaseId || changes.caseIndex)) requestRetention();
+    });
+  }
+
   chrome.runtime.onConnect.addListener(port => {
     if (sidePanel.trackLayoutPort(port)) return;
     if (port.name !== RECORDING_KEEPALIVE_PORT) return;
     keepalivePorts.add(port);
-    port.onDisconnect.addListener(() => keepalivePorts.delete(port));
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      keepalivePorts.delete(port);
+    });
   });
 
   chrome.action.onClicked.addListener(tab => sidePanel.openForTab(tab));

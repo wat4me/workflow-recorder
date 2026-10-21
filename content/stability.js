@@ -19,9 +19,84 @@
   function create() {
     let effectVersion = 0;
     let waitGeneration = 0;
+    const debug = globalThis.WorkflowRecorderProtocol;
+    const mutationHistory = [];
+    let tracking = false;
+    let lastChangeAt = Date.now();
+    let visualMutationCount = 0;
+    let clickSequence = 0;
+    const clickEffects = globalThis.RecorderClickEffects.create({ onFinish: (observation, evidence) => {
+      debug?.recordingDebug("click-dom-result", { clickId: observation.id, ...observation.result,
+        baseline: observation.baseline, version: effectVersion, waitedMs: Date.now() - observation.startedAt,
+        viewport: debug.debugViewport(), acceptedMutations: evidence.slice(0, 5).map(summarizeMutation),
+        mutations: mutationEvidence(mutationHistory.filter(item => item.version > observation.baseline)),
+        historyTruncated: mutationHistory.length > 0 && mutationHistory[0].version > observation.baseline + 1 });
+    } });
+
+    function styleSummary(value) {
+      // CSS URLs and arbitrary custom properties are unnecessary here.
+      const allowed = /^(?:zoom|width|height|min-width|min-height|max-width|max-height|top|left|right|bottom|display|visibility|opacity|transform|position|background-color|overflow(?:-x|-y)?)$/;
+      return String(value || "").split(";").filter(item => allowed.test(item.split(":")[0].trim()))
+        .join(";").slice(0, 240);
+    }
+
+    function summarizeMutation(record) {
+      const summary = { type: record.type, target: debug.debugElement(record.target),
+        parent: debug.debugElement(record.target?.parentElement) };
+      if (record.type === "attributes") {
+        summary.attribute = record.attributeName;
+        if (record.attributeName === "style") {
+          summary.before = styleSummary(record.oldValue);
+          summary.after = styleSummary(record.target?.getAttribute?.("style"));
+        } else if (["class", "hidden", "aria-hidden", "aria-expanded"].includes(record.attributeName)) {
+          summary.before = String(record.oldValue ?? "").slice(0, 180);
+          summary.after = String(record.target?.getAttribute?.(record.attributeName) ?? "").slice(0, 180);
+        }
+      } else if (record.type === "childList") {
+        summary.addedCount = record.addedNodes.length;
+        summary.removedCount = record.removedNodes.length;
+        summary.added = Array.from(record.addedNodes).slice(0, 3).map(debug.debugElement);
+        summary.removed = Array.from(record.removedNodes).slice(0, 3).map(debug.debugElement);
+      }
+      return summary;
+    }
+
+    function mutationEvidence(records) {
+      const result = [];
+      let budget = 6500;
+      for (const record of records.slice(0, 8)) {
+        const item = { ...record, samples: [] };
+        for (const sample of record.samples) {
+          const size = JSON.stringify(sample).length;
+          if (size > budget) break;
+          item.samples.push(sample);
+          budget -= size;
+        }
+        result.push(item);
+        if (budget < 500) break;
+      }
+      return result;
+    }
 
     function applyRecords(records) {
-      if (records.some(record => !isFramePrimerMutation(record))) effectVersion++;
+      const meaningful = records.filter(record => !isFramePrimerMutation(record));
+      if (!meaningful.length) return;
+      // Keep the screenshot quiet clock across requests. Libraries often write
+      // the same style/class on every timer tick; those writes do not repaint.
+      const changed = meaningful.filter(record => record.type === "attributes"
+        ? record.oldValue !== record.target?.getAttribute?.(record.attributeName)
+        : record.type !== "characterData" || record.oldValue !== record.target?.data);
+      if (changed.length) {
+        lastChangeAt = Date.now();
+        visualMutationCount += changed.length;
+      }
+      effectVersion++;
+      if (debug?.RECORDING_DEBUG_ENABLED) {
+        mutationHistory.push({ at: Date.now(), version: effectVersion, count: meaningful.length,
+          samples: meaningful.slice(0, 5).map(summarizeMutation) });
+        if (mutationHistory.length > 24) mutationHistory.shift();
+      }
+      clickEffects.observe(meaningful);
     }
 
     function isFramePrimerMutation(mutation) {
@@ -41,15 +116,72 @@
       if (!document.documentElement) return;
       effectObserver.observe(document.documentElement, {
         attributes: true,
+        attributeOldValue: true,
         childList: true,
         characterData: true,
+        characterDataOldValue: true,
         subtree: true
       });
+      if (!tracking) {
+        tracking = true;
+        lastChangeAt = Date.now();
+        // The tracker also checks dimensions if DOM changes arrive first.
+        window.addEventListener("resize", onResize, true);
+        window.visualViewport?.addEventListener("resize", onVisualResize);
+        window.addEventListener("pagehide", onPageHide);
+        document.addEventListener("focusin", onFocus, true);
+        document.addEventListener("focusout", onFocus, true);
+        for (const name of ["click", "input", "change"]) document.addEventListener(name, onActivity, true);
+        for (const name of ["pointerdown", "mousedown", "keydown", "beforeinput"]) {
+          document.addEventListener(name, onInteraction, true);
+        }
+        debug?.recordingDebug("tracking-start", { viewport: debug.debugViewport() });
+      }
     }
 
+    function interruptClicks(reason) {
+      applyRecords(effectObserver.takeRecords());
+      clickEffects.interrupt(reason);
+    }
+    const onActivity = event => { if (event.isTrusted) lastChangeAt = Date.now(); };
+    const onInteraction = event => {
+      if (event.isTrusted) {
+        lastChangeAt = Date.now();
+        interruptClicks("next-interaction");
+      }
+    };
+    const onResize = () => {
+      lastChangeAt = Date.now();
+      clickEffects.interrupt("viewport-resize");
+      applyRecords(effectObserver.takeRecords());
+      debug?.recordingDebug("viewport-resize", { viewport: debug.debugViewport() });
+    };
+    const onVisualResize = () => {
+      lastChangeAt = Date.now();
+      clickEffects.interrupt("viewport-resize");
+      debug?.recordingDebug("visual-viewport-resize", { viewport: debug.debugViewport() });
+    };
+    const onPageHide = event => debug?.recordingDebug("pagehide", { persisted: event.persisted, viewport: debug.debugViewport() });
+    const onFocus = event => debug?.recordingDebug(event.type, { target: debug.debugElement(event.target) });
+
     function stopEffectTracking() {
+      waitGeneration++;
       effectObserver.disconnect();
       effectObserver.takeRecords();
+      clickEffects.stop();
+      if (tracking) {
+        tracking = false;
+        window.removeEventListener("resize", onResize, true);
+        window.visualViewport?.removeEventListener("resize", onVisualResize);
+        window.removeEventListener("pagehide", onPageHide);
+        document.removeEventListener("focusin", onFocus, true);
+        document.removeEventListener("focusout", onFocus, true);
+        for (const name of ["click", "input", "change"]) document.removeEventListener(name, onActivity, true);
+        for (const name of ["pointerdown", "mousedown", "keydown", "beforeinput"]) {
+          document.removeEventListener(name, onInteraction, true);
+        }
+        debug?.recordingDebug("tracking-stop", {});
+      }
     }
 
     function isVisible(element) {
@@ -93,62 +225,62 @@
       return null;
     }
 
-    async function waitForClickEffect(baseline, timeoutMs = 1200) {
+    async function waitForClickEffect(baseline, timeoutMs = 1200, clickId = null) {
       applyRecords(effectObserver.takeRecords());
-      const initialVersion = Number.isFinite(Number(baseline)) ? Number(baseline) : effectVersion;
-      const deadline = Date.now() + Math.max(200, Math.min(Number(timeoutMs) || 1200, 3000));
-      while (Date.now() < deadline) {
-        if (effectVersion > initialVersion) return { changed: true, version: effectVersion };
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-      return { changed: false, version: effectVersion };
+      return clickEffects.wait(clickId);
     }
 
     async function waitForPageStable(options = {}) {
+      // Recording normally owns the observer. Also support a direct stability
+      // request without leaving an observer behind when recording is stopped.
+      const temporaryTracking = !tracking;
+      if (temporaryTracking) startEffectTracking();
+      applyRecords(effectObserver.takeRecords());
       const generation = ++waitGeneration;
       const timeoutMs = Math.max(500, Math.min(Number(options.timeoutMs) || 3500, 8000));
       const quietMs = Math.max(150, Math.min(Number(options.quietMs) || 450, 1500));
       const startedAt = Date.now();
-      let lastMutationAt = startedAt;
-      let mutationCount = 0;
-      const observer = new MutationObserver(() => {
-        lastMutationAt = Date.now();
-        mutationCount++;
-      });
-      observer.observe(document.documentElement, {
-        attributes: true,
-        childList: true,
-        characterData: true,
-        subtree: true
-      });
+      const activityAt = Math.min(Number(options.activityAt) || 0, startedAt);
+      const initialMutationCount = visualMutationCount;
+      const result = fields => ({ ...fields, waitedMs: Date.now() - startedAt,
+        mutationCount: visualMutationCount - initialMutationCount, lastChangeAt: Math.max(lastChangeAt, activityAt) });
 
       try {
         while (Date.now() - startedAt < timeoutMs) {
           if (generation !== waitGeneration) {
-            return { stable: false, cancelled: true, waitedMs: Date.now() - startedAt, mutationCount };
+            return result({ stable: false, cancelled: true });
           }
           const loadingIndicator = getLoadingIndicator();
-          const quietForMs = Date.now() - lastMutationAt;
+          const quietForMs = Date.now() - Math.max(lastChangeAt, activityAt);
           if (document.readyState !== "loading" && !loadingIndicator && quietForMs >= quietMs) {
-            return { stable: true, waitedMs: Date.now() - startedAt, mutationCount };
+            return result({ stable: true });
           }
-          await new Promise(resolve => setTimeout(resolve, 80));
+          const remainingQuietMs = quietMs - quietForMs;
+          await new Promise(resolve => setTimeout(resolve,
+            Math.min(80, remainingQuietMs > 0 ? remainingQuietMs : 80, timeoutMs - (Date.now() - startedAt))));
         }
         const loadingIndicator = getLoadingIndicator();
-        return {
+        return result({
           stable: false,
           timedOut: true,
-          waitedMs: Date.now() - startedAt,
-          mutationCount,
           loadingIndicator,
           loadingIndicatorVisible: !!loadingIndicator
-        };
+        });
       } finally {
-        observer.disconnect();
+        if (temporaryTracking) stopEffectTracking();
       }
     }
 
     return {
+      traceClick: (event, target, baseline) => {
+        const clickId = `click-${Date.now()}-${++clickSequence}`;
+        clickEffects.begin(clickId, target, baseline);
+        debug?.recordingDebug("click-candidate", { clickId, baseline,
+          hit: debug.debugElement(event.target), target: debug.debugElement(target),
+          x: event.clientX, y: event.clientY, viewport: debug.debugViewport(),
+          recentMutations: mutationEvidence(mutationHistory.filter(item => Date.now() - item.at <= 500).slice(-3)) });
+        return clickId;
+      },
       cancelWait: () => { waitGeneration++; },
       dispose: stopEffectTracking,
       /**

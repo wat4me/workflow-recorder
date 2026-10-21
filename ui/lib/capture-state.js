@@ -40,7 +40,8 @@
   function resolve(action, capture = {}) {
     if (!action) return "";
     const status = action.screenshotStatus;
-    const isCapturing = !!capture.busy && capture.activeActionId === action.id;
+    const activeCapture = capture.activeCaptures?.find(item => item.actionId === action.id);
+    const isCapturing = !!activeCapture || (!!capture.busy && capture.activeActionId === action.id);
 
     if (action.screenshotKey) {
       if (status === "pending") return isCapturing ? "recapturing" : "pending";
@@ -51,7 +52,7 @@
     if (status === "failed" || action.screenshotError) return "failed";
     if (status === "pending") {
       if (!isCapturing) return "pending";
-      return capture.kind === "manual" ? "capturing-manual" : "capturing-auto";
+      return (activeCapture?.kind || capture.kind) === "manual" ? "capturing-manual" : "capturing-auto";
     }
     return "";
   }

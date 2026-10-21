@@ -20,6 +20,7 @@ const PANEL_PATH = "ui/popup.html";
 
 export function createSidePanelController({ isRecordableTab }) {
   const layoutTabs = new Map();
+  const layoutPorts = new Map();
 
   const ready = Promise.all([
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }),
@@ -107,10 +108,22 @@ export function createSidePanelController({ isRecordableTab }) {
     if (port.name !== LAYOUT_PORT_NAME) return false;
     let windowId = null;
     port.onMessage.addListener(message => {
-      if (Number.isInteger(message.windowId)) windowId = message.windowId;
+      if (!Number.isInteger(message.windowId)) return;
+      if (windowId !== null && windowId !== message.windowId && layoutPorts.get(windowId) === port) {
+        layoutPorts.delete(windowId);
+        restoreWindow(windowId);
+      }
+      windowId = message.windowId;
+      layoutPorts.set(windowId, port);
     });
     port.onDisconnect.addListener(() => {
-      if (windowId !== null) restoreWindow(windowId);
+      void chrome.runtime.lastError;
+      // A replacement may already have rebound the panel. Its predecessor's
+      // delayed disconnect must not undo the newly restored page layout.
+      if (windowId !== null && layoutPorts.get(windowId) === port) {
+        layoutPorts.delete(windowId);
+        restoreWindow(windowId);
+      }
     });
     return true;
   }

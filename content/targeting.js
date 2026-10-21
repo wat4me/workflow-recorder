@@ -86,6 +86,16 @@
     return element instanceof Element && element !== document.body && element !== document.documentElement;
   }
 
+  function hasClickSemantics(element) {
+    if (!(element instanceof Element)) return false;
+    const role = (element.getAttribute("role") || "").trim().toLowerCase();
+    return ["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT", "OPTION", "SUMMARY", "LABEL", "CANVAS"].includes(element.tagName.toUpperCase()) ||
+      ["button", "link", "checkbox", "radio", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "switch", "slider"].includes(role) ||
+      element.hasAttribute("onclick") || element.isContentEditable ||
+      window.getComputedStyle(element).cursor === "pointer" ||
+      (element.hasAttribute("tabindex") && Number(element.getAttribute("tabindex")) >= 0);
+  }
+
   function isRecordableTextInput(element) {
     if (!element) return false;
     const tagName = element.tagName && element.tagName.toUpperCase();
@@ -114,6 +124,7 @@
     getEditableValue,
     getInteractableTarget,
     isMeaningfulClickTarget,
+    hasClickSemantics,
     makePointerPoint,
     makeTopViewportPointer
   };

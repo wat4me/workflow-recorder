@@ -3,6 +3,7 @@
  * header of capture-settings.js for what measuring the sharpness presets showed.
  */
 const SCREENCAST_JPEG_QUALITY = 75;
+const STOP_SCREENCAST_TIMEOUT_MS = 100;
 
 /** CDP screencast sessions and latest-frame cache for recorded tabs. */
 export function createScreencastManager() {
@@ -10,6 +11,7 @@ export function createScreencastManager() {
   const contexts = new Map();
   const starts = new Map();
   const waiters = new Map();
+  let acceptingStarts = true;
 
   function target(tabId) {
     return { tabId };
@@ -20,12 +22,15 @@ export function createScreencastManager() {
   }
 
   async function start(tabId, plan = {}) {
+    if (!acceptingStarts) return;
     if (!Number.isInteger(tabId) || sessions.has(tabId)) return;
     if (starts.has(tabId)) return starts.get(tabId);
 
     const promise = (async () => {
       try {
+        globalThis.WorkflowRecorderProtocol?.recordingDebug("debugger-attach-start", { tabId });
         await chrome.debugger.attach(target(tabId), "1.3");
+        globalThis.WorkflowRecorderProtocol?.recordingDebug("debugger-attached", { tabId });
         contexts.set(tabId, new Set());
         await send(tabId, "Runtime.enable");
         await send(tabId, "Page.enable");
@@ -70,9 +75,19 @@ export function createScreencastManager() {
     sessions.delete(tabId);
     contexts.delete(tabId);
     rejectWaiters(tabId, new Error("Screencast stopped"));
-    try {
-      if (session.screenshots) await send(tabId, "Page.stopScreencast");
-    } catch (error) {}
+    if (session.screenshots) {
+      let timer;
+      try {
+        await Promise.race([
+          send(tabId, "Page.stopScreencast").catch(() => {}),
+          new Promise(resolve => { timer = setTimeout(resolve, STOP_SCREENCAST_TIMEOUT_MS); })
+        ]);
+      } catch (error) {
+        // A closed target or a late response must not prevent detach.
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     try {
       await chrome.debugger.detach(target(tabId));
     } catch (error) {}
@@ -169,6 +184,8 @@ export function createScreencastManager() {
   });
 
   return {
+    beginRecording: () => { acceptingStarts = true; },
+    beginStopping: () => { acceptingStarts = false; },
     send,
     contexts: tabId => [...(contexts.get(tabId) || [])],
     getFrame,

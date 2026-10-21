@@ -16,10 +16,21 @@
     let nativeDrag = null;
     let suppressClickUntil = 0;
 
+    function dragEvidence(element) {
+      const control = element.closest('[draggable="true"],.drag-item,input[type="range"],[role="slider"],[aria-grabbed="true"],canvas');
+      const cursor = window.getComputedStyle(element).cursor;
+      return !!control || /^(?:grab|grabbing|move|(?:[nesw]{1,2}|col|row|ew|ns|nesw|nwse)-resize)$/.test(cursor);
+    }
+
     function beginDrag(event) {
       const sourceElement = getDragSourceElement(event.target);
       return {
         sourceElement,
+        draggableControl: dragEvidence(sourceElement),
+        rect: sourceElement.getBoundingClientRect(),
+        parent: sourceElement.parentNode,
+        nextSibling: sourceElement.nextSibling,
+        viewport: { width: window.innerWidth, height: window.innerHeight, x: window.scrollX, y: window.scrollY },
         startTime: Date.now(),
         start: makePointerPoint(event, sourceElement),
         path: [makePointerPoint(event, sourceElement)],
@@ -32,6 +43,7 @@
       if (!isRecording() || event.button !== 0 || event.pointerType === "touch") return;
       if (!(event.target instanceof Element)) return;
       if (event.target === document.documentElement || event.target === document.body) return;
+      suppressClickUntil = 0;
       activeDrag = { ...beginDrag(event), pointerId: event.pointerId };
     }
 
@@ -57,6 +69,7 @@
     function handleMouseDown(event) {
       if (!isRecording() || event.button !== 0 || !(event.target instanceof Element)) return;
       if (event.target === document.documentElement || event.target === document.body) return;
+      suppressClickUntil = 0;
       mouseDrag = beginDrag(event);
     }
 
@@ -102,7 +115,7 @@
 
     function handleNativeDragStart(event) {
       if (!isRecording() || !(event.target instanceof Element)) return;
-      nativeDrag = { ...beginDrag(event), dragging: true };
+      nativeDrag = { ...beginDrag(event), dragging: true, native: true };
       activeDrag = null;
       mouseDrag = null;
     }
@@ -133,11 +146,31 @@
     function recordCompletedDrag(drag, event, rawTarget) {
       if (!window.SemanticElementAnalyzer) return;
       const sourceElement = getDragSourceElement(drag.sourceElement) || drag.sourceElement;
+      const rect = sourceElement.getBoundingClientRect();
+      const sameViewport = drag.viewport.width === window.innerWidth && drag.viewport.height === window.innerHeight &&
+        drag.viewport.x === window.scrollX && drag.viewport.y === window.scrollY;
+      const moved = !sourceElement.isConnected || sourceElement.parentNode !== drag.parent || sourceElement.nextSibling !== drag.nextSibling ||
+        (sameViewport && Math.hypot(rect.x - drag.rect.x, rect.y - drag.rect.y) >= 2);
+      suppressClickUntil = Date.now() + 500;
+      if (!drag.native && !drag.draggableControl && !moved) {
+        globalThis.WorkflowRecorderProtocol?.recordingDebug("drag-filtered", {
+          source: globalThis.WorkflowRecorderProtocol.debugElement(sourceElement), reason: "no-drag-evidence",
+          distance: Math.round(Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y))
+        });
+        return;
+      }
       const stableRawTarget = getDragTargetElement(rawTarget) || rawTarget;
       const targetElement = getInteractableTarget(stableRawTarget) || stableRawTarget;
       const end = makePointerPoint(event, targetElement);
       drag.path.push(end);
       suppressClickUntil = Date.now() + 500;
+      globalThis.WorkflowRecorderProtocol?.recordingDebug("drag-recorded", {
+        source: globalThis.WorkflowRecorderProtocol.debugElement(sourceElement),
+        target: globalThis.WorkflowRecorderProtocol.debugElement(targetElement),
+        distance: Math.round(Math.hypot(event.clientX - drag.start.x, event.clientY - drag.start.y)),
+        threshold: DRAG_THRESHOLD_PX,
+        draggableControl: drag.draggableControl, moved, native: !!drag.native
+      });
       recordAction({
         type: "drag",
         source: window.SemanticElementAnalyzer.analyze(sourceElement),

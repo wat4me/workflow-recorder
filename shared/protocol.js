@@ -45,6 +45,9 @@
     cleanupScreenshots: "cleanupScreenshots",
     logAction: "logAction",
     logClickAction: "logClickAction",
+    recordingDebugEvent: "recordingDebugEvent",
+    exportRecordingDebug: "exportRecordingDebug",
+    clearRecordingDebug: "clearRecordingDebug",
     stepsUpdated: "stepsUpdated",
 
     pingRecorder: "pingRecorder",
@@ -94,11 +97,65 @@
    */
   function reportClickSkipped(reason, detail = {}) {
     console.debug(`[Workflow Recorder] click not recorded: ${reason}`, detail);
+    recordingDebug("click-skipped", { reason, ...detail });
+  }
+
+  // Temporary diagnostics for the unreleased build. One switch removes the
+  // instrumentation and its settings controls when this investigation is over.
+  const RECORDING_DEBUG_ENABLED = false;
+  let debugSink = null;
+  const debugDocumentId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  function debugElement(element) {
+    if (!element) return null;
+    const tag = element.tagName?.toLowerCase() || (element.nodeType === 3 ? "#text" : "node");
+    const id = element.id ? `#${element.id}` : "";
+    const classes = Array.from(element.classList || []).slice(0, 3).map(name => `.${name}`).join("");
+    return `${tag}${id}${classes}`.slice(0, 180);
+  }
+
+  function debugViewport() {
+    const root = globalThis.document?.documentElement;
+    return {
+      width: globalThis.innerWidth, height: globalThis.innerHeight,
+      clientWidth: root?.clientWidth, clientHeight: root?.clientHeight,
+      scrollWidth: root?.scrollWidth, zoom: root?.style?.getPropertyValue?.("zoom") || "",
+      visualWidth: globalThis.visualViewport?.width, visualHeight: globalThis.visualViewport?.height
+    };
+  }
+
+  function recordingDebug(event, detail = {}) {
+    if (!RECORDING_DEBUG_ENABLED) return;
+    const entry = { event, at: Date.now(), document: debugDocumentId, detail: { ...detail } };
+    // Exclude URL parameters and fragments; never read input values or DOM text.
+    try {
+      const url = new URL(globalThis.location?.href);
+      entry.page = `${url.origin}${url.pathname}`;
+    } catch { /* A worker or test may not have a document URL. */ }
+    if (entry.detail.url) {
+      try {
+        const url = new URL(entry.detail.url);
+        entry.detail.url = `${url.origin}${url.pathname}`;
+      } catch { delete entry.detail.url; }
+    }
+    try {
+      if (debugSink) Promise.resolve(debugSink(entry)).catch(() => {});
+      else if (globalThis.chrome?.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({ action: MESSAGE.recordingDebugEvent, entry }, () => {
+          void chrome.runtime.lastError;
+        });
+      }
+    } catch { /* Diagnostics must never interrupt recording or page teardown. */ }
   }
 
   globalThis.WorkflowRecorderProtocol = Object.freeze({
     MESSAGE,
     CLICK_SKIP_REASON,
-    reportClickSkipped
+    reportClickSkipped,
+    RECORDING_DEBUG_ENABLED,
+    recordingDebug,
+    debugElement,
+    debugViewport,
+    setRecordingDebugSink: sink => { debugSink = sink; }
   });
 })();

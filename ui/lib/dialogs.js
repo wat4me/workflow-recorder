@@ -46,10 +46,11 @@
     };
     toast.addEventListener("click", remove);
     setTimeout(remove, Math.max(1200, timeoutMs));
+    return remove;
   }
 
   function reportError(message) {
-    notify(message || t("unexpectedError", [], "操作失败"), { danger: true, timeoutMs: 6000 });
+    return notify(message || t("unexpectedError", [], "操作失败"), { danger: true, timeoutMs: 6000 });
   }
 
   function confirmAction({

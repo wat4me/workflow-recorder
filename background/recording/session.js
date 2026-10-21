@@ -8,7 +8,7 @@
 import * as actionStore from "../store/actions.js";
 import { ORIGIN_KEY } from "../store/workspace-origin.js";
 import { capturePlanFor, readCaptureSettings, SESSION_CAPTURE_SETTINGS_KEY } from "../../shared/capture-settings.js";
-import { injectRecordingScripts } from "./injection.js";
+import { beginRecordingInjection, injectRecordingScripts, stopRecordingInjection } from "./injection.js";
 import "../../shared/protocol.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
@@ -63,6 +63,8 @@ export function createRecordingSession({ t, scope, cases, screencast, screenshot
     });
 
     try {
+      beginRecordingInjection();
+      screencast.beginRecording?.();
       // Continuing re-adopts the windows the paused session covered -- including
       // ones opened mid-recording, which no event would bring back on its own.
       const sessionTabs = continueHistory
@@ -105,40 +107,66 @@ export function createRecordingSession({ t, scope, cases, screencast, screenshot
   }
 
   async function stop() {
-    const { recordingTabIds } = await scope.readScope();
-    // In parallel: these are independent tabs, and doing them in sequence adds a
-    // message round trip per tab to how long the debugging infobar stays up.
-    // Rejections are ignored because a tab may already be closed.
-    await Promise.all(recordingTabIds.map(async tabId => {
-      // A tab-wide send reaches every frame but resolves with just one reply.
-      // Wait for each frame separately, otherwise the top frame can acknowledge
-      // before an iframe has committed its final input into this draft.
-      const id = Number(tabId);
-      let frames = null;
-      try { frames = await chrome.webNavigation?.getAllFrames({ tabId: id }); } catch { /* Tab closed. */ }
-      if (Array.isArray(frames) && frames.length) {
-        await Promise.all(frames.map(frame => chrome.tabs.sendMessage(id,
-          { action: MESSAGE.stopRecording }, { frameId: frame.frameId }).catch(() => {})));
-      } else {
-        await chrome.tabs.sendMessage(id, { action: MESSAGE.stopRecording }).catch(() => {});
-      }
-    }));
-
-    // Order matters: let queued action writes land, then let pending screenshots
-    // bind to them, and only then tear down the CDP sessions those need.
-    //
-    // This ordering is also why `flush` runs in a hurry. Chrome shows its
-    // "started debugging this browser" infobar for as long as the screencast is
-    // attached, so every millisecond spent here is a millisecond the user stares
-    // at a debugging banner for a recording they already stopped.
+    const startedAt = Date.now();
+    const phases = {};
+    const mark = name => {
+      phases[name] = Date.now() - startedAt;
+      globalThis.WorkflowRecorderProtocol.recordingDebug("recording-stop-phase", { phase: name, elapsedMs: phases[name] });
+    };
+    globalThis.WorkflowRecorderProtocol.recordingDebug("recording-stop-start");
+    // Stop waiting for page stability/new paints before committing the final
+    // input. Jobs queued by those final commits inherit the finishing mode.
+    screenshots.beginStopping?.();
+    screencast.beginStopping?.();
+    stopRecordingInjection();
     try {
+      const { recordingTabIds } = await scope.readScope();
+      // Wait for each frame's final input, in parallel across pages/frames.
+      // A tab-wide send resolves with just one reply and can miss an iframe.
+      await Promise.all(recordingTabIds.map(async tabId => {
+        const id = Number(tabId);
+        let frames = null;
+        try { frames = await chrome.webNavigation?.getAllFrames({ tabId: id }); } catch { /* Tab closed. */ }
+        if (Array.isArray(frames) && frames.length) {
+          await Promise.all(frames.map(frame => chrome.tabs.sendMessage(id,
+            { action: MESSAGE.stopRecording }, { frameId: frame.frameId }).catch(() => {})));
+        } else {
+          await chrome.tabs.sendMessage(id, { action: MESSAGE.stopRecording }).catch(() => {});
+        }
+      }));
+      mark("pagesStoppedMs");
       await drainActions();
-      await screenshots.flush();
+      mark("actionsCommittedMs");
+      // Frame ownership, rather than media persistence, is the detach barrier.
+      // No job reads the live cache after this synchronous snapshot.
+      screenshots.freezeFrames?.();
+      mark("framesFrozenMs");
     } finally {
       try {
         await screencast.stopAll();
+        mark("debuggerReleasedMs");
       } finally {
-        await scope.clearScope();
+        // Detach removes the debugger's worker-lifetime protection. Keep this
+        // bounded task alive until its awaited writes finish, including when
+        // the user closes the panel. Always release the heartbeat in finally.
+        const keepAlive = chrome.runtime?.getPlatformInfo ? setInterval(() => {
+          try { chrome.runtime.getPlatformInfo().catch(() => {}); } catch { /* Extension shutting down. */ }
+        }, 20000) : null;
+        try {
+          // Still part of this request and the recording-transition queue: a
+          // draft switch/new start cannot overtake these writes after detach.
+          await screenshots.flush();
+          mark("screenshotsSavedMs");
+        } finally {
+          if (keepAlive !== null) clearInterval(keepAlive);
+          try {
+            await scope.clearScope();
+          } finally {
+            globalThis.WorkflowRecorderProtocol.recordingDebug("recording-stop-timing", {
+              ...phases, totalMs: Date.now() - startedAt
+            });
+          }
+        }
       }
     }
     return { success: true };

@@ -37,11 +37,16 @@
 
     function fit() {
       if (!enabled || !document.documentElement) return;
+      const debug = globalThis.WorkflowRecorderProtocol;
+      const before = debug?.debugViewport();
       remember();
       const viewportWidth = window.innerWidth;
       const pageWidth = measureWidth();
       fittedViewportWidth = viewportWidth;
-      if (pageWidth - viewportWidth <= 2 || viewportWidth <= 0) return;
+      if (pageWidth - viewportWidth <= 2 || viewportWidth <= 0) {
+        debug?.recordingDebug("page-fit", { before, after: debug.debugViewport(), pageWidth, applied: false });
+        return;
+      }
       // Scaling alone brings the layout inside the viewport. Forcing
       // overflow-x:hidden on top of it used to override the site's own overflow
       // handling and could clip content whenever the scale under-corrected.
@@ -50,6 +55,7 @@
         String(Math.min(1, viewportWidth / pageWidth)),
         "important"
       );
+      debug?.recordingDebug("page-fit", { before, after: debug.debugViewport(), pageWidth, applied: true });
     }
 
     function schedule(delay = 0) {
@@ -62,6 +68,8 @@
         return;
       }
       enabled = nextEnabled;
+      globalThis.WorkflowRecorderProtocol?.recordingDebug("page-fit-enabled", { enabled: nextEnabled,
+        viewport: globalThis.WorkflowRecorderProtocol.debugViewport() });
       if (!enabled) {
         clearTimeout(timer);
         timer = null;

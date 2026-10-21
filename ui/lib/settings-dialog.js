@@ -60,6 +60,12 @@
               [],
               "截图始终按标签页当前的原生分辨率保存，不做缩放。截图采集设置在下次开始或继续录制时生效；侧边栏显示设置保存后立即生效。"
             ))}</p>
+            ${globalThis.WorkflowRecorderProtocol.RECORDING_DEBUG_ENABLED ? `
+            <div class="recording-debug-tools">
+              <p class="capture-settings-hint">${escapeHtml(t("recordingDebugHint", [], "调试版：保留近期点击判定、页面尺寸和 DOM 变化，不包含输入内容。复现后可导出日志。"))}</p>
+              <button type="button" class="btn btn-secondary" id="export-recording-debug">${escapeHtml(t("exportRecordingDebug", [], "导出调试日志"))}</button>
+              <button type="button" class="btn btn-secondary" id="clear-recording-debug">${escapeHtml(t("clearRecordingDebug", [], "清空调试日志"))}</button>
+            </div>` : ""}
           </div>
           <div class="confirm-actions">
             <button type="button" class="confirm-cancel">${escapeHtml(t("cancel", [], "取消"))}</button>
@@ -71,6 +77,22 @@
       toggle.checked = current.screenshots;
       const expandedToggle = overlay.querySelector("#sidebar-screenshots-expanded");
       expandedToggle.checked = currentDisplay.screenshotsExpanded;
+      for (const [id, action] of [["export-recording-debug", "exportRecordingDebug"], ["clear-recording-debug", "clearRecordingDebug"]]) {
+        const button = overlay.querySelector(`#${id}`);
+        button?.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            const response = await globalThis.RecorderBridge.sendRuntimeMessage({ action: globalThis.WorkflowRecorderProtocol.MESSAGE[action] });
+            if (!response?.success) throw new Error(response?.error || t("recordingDebugFailed", [], "调试日志操作失败"));
+            if (response.log) {
+              globalThis.RecorderExport.triggerDownload(new Blob([JSON.stringify(response.log, null, 2)], { type: "application/json" }),
+                `workflow-recorder-debug-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+            } else globalThis.RecorderDialogs.notify(t("recordingDebugCleared", [], "调试日志已清空"));
+          } catch (error) {
+            globalThis.RecorderDialogs.reportError(error.message);
+          } finally { button.disabled = false; }
+        });
+      }
 
       let finishing = false;
       const finish = async saved => {
@@ -94,7 +116,7 @@
       };
       const onKeyDown = event => {
         if (event.key === "Escape") finish(false);
-        if (event.key === "Enter") finish(true);
+        if (event.key === "Enter" && !event.target?.closest?.(".recording-debug-tools")) finish(true);
       };
 
       overlay.querySelector(".confirm-cancel").addEventListener("click", () => finish(false));

@@ -4,6 +4,7 @@ const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
 
 /** Builds the message boundary from application services. */
 export function createApplicationRoutes({
+  recordingDebug,
   accessibility,
   actionLog,
   actionStore,
@@ -23,6 +24,13 @@ export function createApplicationRoutes({
     ? queueRecordingTransition(async () => { await drafts.assertActive(request.workspaceDraftId); return callback(); })
     : callback();
   return {
+    ...(globalThis.WorkflowRecorderProtocol.RECORDING_DEBUG_ENABLED ? {
+      [MESSAGE.recordingDebugEvent]: (request, sender) => recordingDebug.append({
+        ...request.entry, tabId: sender.tab?.id, frameId: sender.frameId, browserDocumentId: sender.documentId
+      }).then(() => ({ success: true })),
+      [MESSAGE.exportRecordingDebug]: async () => ({ success: true, log: await recordingDebug.read() }),
+      [MESSAGE.clearRecordingDebug]: async () => { await recordingDebug.clear(); return { success: true }; },
+    } : {}),
     [MESSAGE.setSidePanelLayout]: async request => {
       const result = await sidePanel.setLayout(request);
       if (result.success && request.open && drafts) return queueRecordingTransition(() => drafts.activate(request.tabId));
@@ -91,9 +99,17 @@ export function createApplicationRoutes({
     },
     [MESSAGE.logClickAction]: (request, sender) => {
       const beforeFrameData = screenshots?.snapshotFrameData?.(sender.tab?.id);
+      // Observe immediately; only committing the result belongs on the action
+      // queue. Otherwise a rapid sequence starts each 1.2s window seconds late.
+      const validation = actionLog.logClick(request, sender, { beforeFrameData, deferCommit: true });
+      validation.catch(() => {}); // The reserved queue slot reports any failure.
       const captured = accessibility?.captureAction(request.payload, sender);
-      return queueAction(async () => actionLog.logClick({ ...request,
-        payload: captured ? await captured : request.payload }, sender, { beforeFrameData }));
+      captured?.catch(() => {}); // A filtered click does not need its AX result.
+      return queueAction(async () => {
+        const result = await validation;
+        if (!result.commit) return result;
+        return result.commit(captured ? await captured : request.payload);
+      });
     }
   };
 }

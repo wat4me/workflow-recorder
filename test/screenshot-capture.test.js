@@ -55,6 +55,8 @@ async function createManager({
   captureFails = false,
   configureStorage = null,
   screencast = {},
+  mediaStore = {},
+  cleanup = null,
   t = (key, subs, fallback) => fallback
 } = {}) {
   const storage = createStorage({ recordingTabIds: [1], isRecording: true, tabsMapping: { 1: "page1" } });
@@ -93,15 +95,16 @@ async function createManager({
     mediaStore: {
       putBlob: async (key, blob) => { blobs.set(key, blob); },
       getBlob: async key => blobs.get(key) || null,
-      getAllKeys: async () => [...blobs.keys()]
+      getAllKeys: async () => [...blobs.keys()],
+      ...mediaStore
     },
-    deleteScreenshots: async keys => {
+    deleteScreenshots: cleanup || (async keys => {
       for (const key of keys) {
         deleted.push(key);
         blobs.delete(key);
       }
       return { deletedCount: keys.length, pending: false };
-    },
+    }),
     notifyStepsUpdated: () => {}
   });
 
@@ -168,6 +171,7 @@ test("capture state writes cannot leave an older pending snapshot after the queu
   // Long enough that an unserialized pump would finish and publish idle before
   // this older pending write is released.
   await new Promise(resolve => setTimeout(resolve, 150));
+  assert.ok(readStep(storage, "step_1").screenshotKey, "slow progress writes must not block capture");
   releaseFirstStateWrite();
   await waitFor(() => readStep(storage, "step_1").screenshotKey, "the capture to finish");
   await waitFor(
@@ -176,6 +180,227 @@ test("capture state writes cannot leave an older pending snapshot after the queu
   );
   assert.equal(storage.data.screenshotCaptureState.busy, false);
   assert.equal(storage.data.screenshotCaptureState.activeActionId, null);
+});
+
+test("a slow tab does not hold up another tab, while steps in that same tab stay ordered", async () => {
+  let releaseSlowTab;
+  const stabilityCalls = [];
+  const { manager, storage } = await createManager({ steps: [
+    { id: "slow", pageName: "page1", screenshotStatus: "pending" },
+    { id: "next", pageName: "page1", screenshotStatus: "pending" },
+    { id: "fast", pageName: "page2", screenshotStatus: "pending" }
+  ] });
+  chrome.tabs.sendMessage = (tabId, message) => {
+    if (message.action !== "waitForPageStable") return Promise.resolve({});
+    stabilityCalls.push(tabId);
+    if (tabId === 1 && !releaseSlowTab) return new Promise(resolve => {
+      releaseSlowTab = () => resolve({ stable: true });
+    });
+    return Promise.resolve({ stable: true });
+  };
+  manager.schedule("slow", TAB, "click");
+  manager.schedule("next", TAB, "click");
+  manager.schedule("fast", { id: 2, windowId: 1 }, "click");
+  try {
+    await waitFor(() => readStep(storage, "fast").screenshotKey, "the independent tab capture");
+    assert.equal(readStep(storage, "slow").screenshotStatus, "pending");
+    assert.equal(readStep(storage, "next").screenshotStatus, "pending");
+    assert.deepEqual(stabilityCalls, [1, 2]);
+  } finally {
+    releaseSlowTab();
+    await manager.flush();
+  }
+  assert.ok(readStep(storage, "slow").screenshotKey);
+  assert.ok(readStep(storage, "next").screenshotKey);
+  assert.equal(storage.data.screenshotCaptureState.pendingCount, 0);
+  assert.deepEqual(storage.data.screenshotCaptureState.activeCaptures, []);
+});
+
+test("capture concurrency is bounded and a settled frame survives waiting for a storage slot", async () => {
+  const releases = new Map();
+  const frames = new Map([1, 2, 3].map(id => [id, { at: 100, data: Buffer.from(`tab-${id}-settled`).toString("base64") }]));
+  const written = [];
+  let thirdFramePinned = false;
+  let activeWrites = 0;
+  let maxWrites = 0;
+  const { manager } = await createManager({
+    steps: [1, 2, 3].map(id => ({ id: `step_${id}`, pageName: `page${id}`, screenshotStatus: "pending" })),
+    screencast: { getLatestFrame: id => { if (id === 3) thirdFramePinned = true; return frames.get(id); } },
+    mediaStore: { async putBlob(key, blob) {
+      activeWrites++;
+      maxWrites = Math.max(maxWrites, activeWrites);
+      written.push({ key, text: await blob.text() });
+      if (!key.startsWith("screenshot:step_3:")) await new Promise(resolve => { releases.set(key, resolve); });
+      activeWrites--;
+    } }
+  });
+  for (const id of [1, 2, 3]) manager.schedule(`step_${id}`, { id, windowId: 1 }, "click");
+  await waitFor(() => releases.size === 2 && thirdFramePinned, "two writes and a queued third frame");
+  assert.equal(written.length, 2);
+  assert.equal(manager.getState().activeCaptures.length, 2);
+  frames.set(3, { at: 200, data: Buffer.from("a later action").toString("base64") });
+  for (const release of releases.values()) release();
+  await manager.flush();
+  assert.equal(maxWrites, 2);
+  assert.equal(written.find(item => item.key.startsWith("screenshot:step_3:")).text, "tab-3-settled");
+});
+
+test("a cached frame preceding the latest page change requests a fresh frame", async () => {
+  const calls = [];
+  const { manager, storage, blobs } = await createManager({
+    steps: [{ id: "step_1", pageName: "page1", screenshotStatus: "pending" }],
+    screencast: {
+      getLatestFrame: () => ({ at: 100, data: FRAME }),
+      getFrame: async (tabId, afterAt) => {
+        calls.push({ tabId, afterAt });
+        return { at: Date.now(), data: Buffer.from("loaded result").toString("base64") };
+      }
+    }
+  });
+  chrome.tabs.sendMessage = (tabId, message) => Promise.resolve(
+    message.action === "waitForPageStable" ? { stable: true, lastChangeAt: 200 } : {}
+  );
+  manager.schedule("step_1", TAB, "click");
+  await waitFor(() => readStep(storage, "step_1").screenshotKey, "a fresh screenshot");
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].afterAt >= 200);
+  assert.equal(await blobs.get(readStep(storage, "step_1").screenshotKey).text(), "loaded result");
+  await manager.flush();
+});
+
+test("manual capture interrupts only its own tab's stability wait and stop cancels all remaining waits", async () => {
+  const waiting = new Map();
+  const cancelled = [];
+  const { manager, storage } = await createManager({ steps: [
+    { id: "step_1", pageName: "page1", screenshotStatus: "pending" },
+    { id: "step_2", pageName: "page2", screenshotStatus: "pending" }
+  ] });
+  chrome.tabs.sendMessage = (id, message) => {
+    if (message.action === "waitForPageStable") return new Promise(resolve => waiting.set(id, resolve));
+    if (message.action === "cancelPageStableWait") {
+      cancelled.push(id);
+      waiting.get(id)?.({ stable: false, cancelled: true });
+    }
+    return Promise.resolve({});
+  };
+  manager.schedule("step_1", TAB, "click");
+  manager.schedule("step_2", { id: 2, windowId: 1 }, "click");
+  await waitFor(() => waiting.size === 2, "both page stability waits");
+  assert.equal((await manager.handleManual(TAB)).success, true);
+  await waitFor(() => readStep(storage, "step_1").screenshotSource === "manual", "the prioritized manual screenshot");
+  assert.deepEqual(cancelled, [1]);
+  assert.equal(readStep(storage, "step_2").screenshotStatus, "pending");
+  await manager.flush();
+  assert.ok(cancelled.includes(2));
+  assert.equal(readStep(storage, "step_2").screenshotStatus, "captured");
+  assert.equal(manager.getState().pendingCount, 0);
+});
+
+for (const fails of [false, true]) {
+  test(`stop detaches before slow media writes finish and ${fails ? "records failures without losing old images" : "saves every queued frame after the live cache disappears"}`, async () => {
+    let releaseWrites;
+    const writes = new Promise(resolve => { releaseWrites = resolve; });
+    let detached = false;
+    let readsAfterDetach = 0;
+    const stored = new Map();
+    let writesStarted = 0;
+    const steps = [1, 2, 3, 4].map(id => ({ id: `pending_${id}`, pageName: `page${id % 2 + 1}`,
+      screenshotStatus: "pending", ...(fails ? { screenshotKey: `old_${id}` } : {}) }));
+    const { manager, storage } = await createManager({ steps,
+      screencast: {
+        has: () => !detached,
+        getLatestFrame: id => {
+          if (detached) { readsAfterDetach++; return null; }
+          return { data: Buffer.from(`tab-${id}`).toString("base64") };
+        }
+      },
+      mediaStore: { async putBlob(key, blob) {
+        writesStarted++;
+        await writes;
+        if (fails) throw new Error("Media disk unavailable");
+        stored.set(key, await blob.text());
+      } }
+    });
+    const { createRecordingSession } = await import("../background/recording/session.js");
+    const session = createRecordingSession({
+      scope: { readScope: async () => ({ recordingTabIds: [1, 2] }), clearScope: async () => {} },
+      screenshots: manager, screencast: { stopAll: async () => { detached = true; } }, drainActions: async () => {}
+    });
+    for (const [index, step] of steps.entries()) manager.schedule(step.id, { id: index % 2 + 1, windowId: 1 }, "click");
+    await waitFor(() => writesStarted > 0, "media persistence to start");
+    let completed = false;
+    const stopping = session.toggle(false).then(result => { completed = true; return result; });
+    try {
+      await waitFor(() => detached, "debugger release while writes are blocked");
+      assert.equal(completed, false, "the stop request still owns and awaits the remaining saves");
+    } finally {
+      releaseWrites();
+    }
+    assert.equal((await stopping).success, true);
+    assert.equal(readsAfterDetach, 0);
+    for (const [index, step] of steps.entries()) {
+      const result = readStep(storage, step.id);
+      if (fails) {
+        assert.equal(result.screenshotStatus, "failed");
+        assert.equal(result.screenshotKey, `old_${index + 1}`);
+      } else {
+        assert.equal(result.screenshotStatus, "captured");
+        assert.equal(stored.get(result.screenshotKey), `tab-${index % 2 + 1}`);
+      }
+    }
+    assert.equal(manager.getState().pendingCount, 0);
+  });
+}
+
+test("stop releases the debugger even while an already-replaced screenshot is waiting for cleanup", async () => {
+  let releaseCleanup;
+  let cleaning = false;
+  let detached = false;
+  const cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+  const { manager, storage } = await createManager({
+    steps: [{ id: "step_1", pageName: "page1", screenshotKey: "old-image" }],
+    cleanup: async () => { cleaning = true; await cleanup; }
+  });
+  manager.schedule("step_1", TAB, "click");
+  await waitFor(() => cleaning, "old image cleanup");
+  assert.equal(readStep(storage, "step_1").screenshotStatus, "captured");
+  const { createRecordingSession } = await import("../background/recording/session.js");
+  const session = createRecordingSession({
+    scope: { readScope: async () => ({ recordingTabIds: [1] }), clearScope: async () => {} },
+    screenshots: manager, screencast: { stopAll: async () => { detached = true; } }, drainActions: async () => {}
+  });
+  const stopping = session.toggle(false);
+  try {
+    await waitFor(() => detached, "debugger release ahead of cleanup");
+  } finally {
+    releaseCleanup();
+  }
+  await stopping;
+});
+
+test("stop abandons a non-responding manual primer and persists its frozen frame after detach", async () => {
+  let priming = false;
+  let detached = false;
+  const { manager, storage, blobs } = await createManager({
+    steps: [{ id: "step_1", pageName: "page1" }],
+    screencast: {
+      has: () => !detached,
+      getLatestFrame: () => detached ? null : { data: FRAME },
+      getFrame: () => { assert.fail("stop must not request a new frame"); }
+    }
+  });
+  chrome.tabs.sendMessage = (id, message) => {
+    if (message.action === "primeScreencastFrame") { priming = true; return new Promise(() => {}); }
+    return Promise.resolve({});
+  };
+  await manager.handleManual(TAB);
+  await waitFor(() => priming, "the manual primer");
+  manager.beginStopping();
+  manager.freezeFrames();
+  detached = true;
+  await manager.flush();
+  assert.equal(readStep(storage, "step_1").screenshotStatus, "captured");
+  assert.equal(await blobs.get(readStep(storage, "step_1").screenshotKey).text(), "frame-bytes");
 });
 
 test("a re-capture writes a new key and only then releases the old one", async () => {
@@ -316,10 +541,7 @@ for (const cachedFrame of [true, false]) {
     const startedAt = Date.now();
     await manager.flush();
     assert.ok(Date.now() - startedAt < 2000, "flush must bound both the primer and frame waits");
-    assert.equal(frameWaits.length, 1);
-    assert.equal(frameWaits[0].tabId, TAB.id);
-    assert.ok(frameWaits[0].afterAt > 0);
-    assert.equal(frameWaits[0].timeoutMs, 800);
+    assert.equal(frameWaits.length, 0, "finishing skips a new frame wait after the primer resolves/times out");
 
     const step = readStep(storage, "step_1");
     if (cachedFrame) {
@@ -505,4 +727,14 @@ test("skipped, failed and pre-existing steps resolve as expected", () => {
   // Recorded before capture state was persisted: say nothing rather than guess.
   assert.equal(resolve({ id: "a" }, {}), "");
   assert.equal(resolve(null, {}), "");
+});
+
+test("cards identify concurrent captures on different tabs", () => {
+  const { resolve } = loadCaptureState();
+  const capture = { busy: true, kind: "auto", activeActionId: "a", activeCaptures: [
+    { actionId: "a", kind: "auto" }, { actionId: "b", kind: "manual" }
+  ] };
+  assert.equal(resolve({ id: "a", screenshotStatus: "pending" }, capture), "capturing-auto");
+  assert.equal(resolve({ id: "b", screenshotStatus: "pending" }, capture), "capturing-manual");
+  assert.equal(resolve({ id: "c", screenshotStatus: "pending" }, capture), "pending");
 });

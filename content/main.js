@@ -73,9 +73,14 @@
    * Top frame only: one port per tab, not one per iframe.
    */
   let keepalivePort = null;
+  let keepaliveRetry = null;
+  let pageSuspended = false;
 
   function openKeepalive() {
     if (window.top !== window || keepalivePort) return;
+    if (!isRecording || pageSuspended) return;
+    clearTimeout(keepaliveRetry);
+    keepaliveRetry = null;
     try {
       keepalivePort = chrome.runtime.connect({ name: "recording-keepalive" });
     } catch (error) {
@@ -84,17 +89,25 @@
       keepalivePort = null;
       return;
     }
-    keepalivePort.onDisconnect.addListener(() => {
+    const port = keepalivePort;
+    port.onDisconnect.addListener(() => {
+      // Chrome reports BFCache disconnections through lastError. Read it in
+      // this callback so an expected navigation is not an unchecked API error.
+      void chrome.runtime.lastError;
+      if (keepalivePort !== port) return;
       keepalivePort = null;
-      // The worker went away despite the port -- older Chrome caps port-held
-      // workers at five minutes. Reconnecting wakes it and re-establishes the
-      // hold; if the extension itself is gone, the connect above throws and the
-      // retries end there.
-      if (isRecording) setTimeout(openKeepalive, 1000);
+      if (isRecording && !pageSuspended) {
+        keepaliveRetry = setTimeout(() => {
+          keepaliveRetry = null;
+          openKeepalive();
+        }, 1000);
+      }
     });
   }
 
   function closeKeepalive() {
+    clearTimeout(keepaliveRetry);
+    keepaliveRetry = null;
     if (!keepalivePort) return;
     const port = keepalivePort;
     keepalivePort = null;
@@ -104,6 +117,33 @@
       // Already gone with the worker.
     }
   }
+
+  window.addEventListener("pagehide", () => {
+    pageSuspended = true;
+    closeKeepalive();
+  });
+  window.addEventListener("pageshow", event => {
+    pageSuspended = false;
+    if (!event.persisted) return;
+    // A cached document missed messages while frozen. Recheck whether the
+    // recording still exists before reconnecting or accepting more actions.
+    isRecording = false;
+    chrome.storage.local.get(["isRecording"], result => {
+      if (chrome.runtime.lastError || pageSuspended) return;
+      isRecording = !!result.isRecording;
+      if (isRecording) {
+        attachEventListeners();
+        openKeepalive();
+      } else {
+        closeKeepalive();
+        hasRecordedNavigation = false;
+        lastHoveredElement = null;
+        inputRecorder.reset();
+        framePrimer.dispose();
+        removeEventListeners();
+      }
+    });
+  });
 
   // Listen to messages from popup or background
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -148,7 +188,7 @@
       pageStability.cancelWait();
       sendResponse({ status: "cancelled" });
     } else if (request.action === MESSAGE.waitForClickEffect) {
-      pageStability.waitForClickEffect(request.baseline, request.timeoutMs).then(sendResponse);
+      pageStability.waitForClickEffect(request.baseline, request.timeoutMs, request.debugClickId).then(sendResponse);
       return true;
     } else if (request.action === MESSAGE.primeScreencastFrame && window.top === window) {
       framePrimer.primeFrame().then(primed => sendResponse({ status: "primed", primed }));
@@ -172,6 +212,7 @@
     pageStability.start();
     document.addEventListener("click", handleClickEvent, true); // Use capture phase
     document.addEventListener("beforeinput", inputRecorder.handleBeforeInput, true);
+    document.addEventListener("focusin", inputRecorder.handleFocus, true);
     document.addEventListener("input", inputRecorder.handleInput, true);
     document.addEventListener("change", inputRecorder.handleChange, true);
     document.addEventListener("keydown", handleKeyDownEvent, true);
@@ -216,6 +257,7 @@
   function removeEventListeners() {
     document.removeEventListener("click", handleClickEvent, true);
     document.removeEventListener("beforeinput", inputRecorder.handleBeforeInput, true);
+    document.removeEventListener("focusin", inputRecorder.handleFocus, true);
     document.removeEventListener("input", inputRecorder.handleInput, true);
     document.removeEventListener("change", inputRecorder.handleChange, true);
     document.removeEventListener("keydown", handleKeyDownEvent, true);
@@ -321,6 +363,8 @@
     if (window.SemanticElementAnalyzer) {
       const analysis = window.SemanticElementAnalyzer.analyze(target);
       console.log("[Workflow Recorder] Click captured:", analysis);
+      const effectBaseline = pageStability.getEffectVersion();
+      const debugClickId = pageStability.traceClick(event, target, effectBaseline);
       recordAction({
         type: "click",
         target: analysis,
@@ -337,12 +381,12 @@
         } } : {}),
         pointer: makeTopViewportPointer(event, target, analysis.boundingBox)
       }, MESSAGE.logClickAction, {
-        effectBaseline: pageStability.getEffectVersion(),
-        // Inline business handlers can update another frame or close a legacy
-        // dialog without mutating this frame's DOM. The click itself is the only
-        // reliable effect signal in that case.
+        effectBaseline,
+        debugClickId,
+        // Native links (including downloads/new tabs) and explicit handlers are
+        // meaningful intents even when navigation delays message delivery.
         forceValid: target.tagName === "CANVAS" ||
-          target.matches('input[type="file"], a[href^="javascript:"]') ||
+          target.matches('input[type="file"], a[href]') ||
           target.hasAttribute("onclick")
       });
     } else {
@@ -360,7 +404,7 @@
     const key = typeof event.key === "string" ? event.key : "";
     if (!key) return;
 
-    inputRecorder.markUserTouched(target);
+    if (event.isTrusted) inputRecorder.markUserTouched(target);
 
     // Keydown can be dispatched at the document when nothing is focused, and the
     // analyzer only understands elements.

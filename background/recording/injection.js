@@ -9,6 +9,18 @@ import { wait } from "../timing.js";
 import "../../shared/protocol.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
+let recordingEnabled = true;
+let recordingGeneration = 0;
+
+export function beginRecordingInjection() {
+  recordingEnabled = true;
+  recordingGeneration++;
+}
+
+export function stopRecordingInjection() {
+  recordingEnabled = false;
+  recordingGeneration++;
+}
 
 /**
  * Injected in order, one executeScript call per batch. The analyzer goes in
@@ -23,6 +35,7 @@ export const INJECTION_BATCHES = [
   ["content/analyzer.js"],
   [
     "shared/protocol.js",
+    "content/click-effects.js",
     "content/stability.js",
     "content/page-fit.js",
     "content/screencast-frame-primer.js",
@@ -67,7 +80,10 @@ export async function ensureContentScripts(tabId, maxAttempts = 5) {
 }
 
 export async function injectRecordingScripts(tabId, recordNavigate = false, maxAttempts = 5) {
+  const generation = recordingGeneration;
+  if (!recordingEnabled) return false;
   await ensureContentScripts(tabId, maxAttempts);
+  if (!recordingEnabled || generation !== recordingGeneration) return false;
   await chrome.tabs.sendMessage(tabId, { action: MESSAGE.startRecording, recordNavigate });
   console.log(`[Background] Recording started in tab ${tabId}`);
 }
@@ -87,6 +103,8 @@ export async function injectRecordingScripts(tabId, recordNavigate = false, maxA
  * only re-attaches listeners, which dedupe because they are stable references.
  */
 export async function injectRecordingScriptsIntoFrame(tabId, frameId, maxAttempts = 3) {
+  const generation = recordingGeneration;
+  if (!recordingEnabled) return false;
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -94,6 +112,7 @@ export async function injectRecordingScriptsIntoFrame(tabId, frameId, maxAttempt
       for (const files of INJECTION_BATCHES) {
         await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files });
       }
+      if (!recordingEnabled || generation !== recordingGeneration) return false;
       await chrome.tabs.sendMessage(
         tabId,
         { action: MESSAGE.startRecording, recordNavigate: false },

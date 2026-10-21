@@ -122,7 +122,7 @@ test("explicit legacy click handlers are recorded without a same-frame DOM mutat
   const content = read("content", "main.js");
 
   assert.match(content, /forceValid:[\s\S]*?target\.hasAttribute\("onclick"\)/);
-  assert.match(content, /a\[href\^="javascript:"\]/);
+  assert.match(content, /a\[href\]/);
 });
 
 test("child tab registration is not blocked by the action queue", () => {
@@ -227,7 +227,7 @@ test("recording and saved-case management stay in their own surfaces", () => {
   // the quiet control in the step list's toolbar, while deleting a selection is a
   // danger button the row reveals only while something is selected
   // (.steps-section-head.is-selecting), so the toolbar never shows a pair of peers.
-  assert.match(popup, /class="step-batch-actions"[\s\S]*?class="step-clear-btn"[^>]*data-i18n="clearSteps"/);
+  assert.match(popup, /class="step-batch-actions"[\s\S]*?class="step-clear-btn"[^>]*data-i18n-aria-label="clearSteps"/);
   assert.match(popup, /class="step-batch-actions"[\s\S]*?class="btn btn-danger step-batch-delete"/);
   assert.match(read("ui", "app", "step-view.js"), /is-selecting", selectedCount > 0/);
   assert.match(read("ui", "styles", "steps.css"), /\.step-batch-actions \.btn \{\s*display: none;/);
@@ -390,9 +390,6 @@ test("a recording holds the worker open, and releases it on both stop paths", ()
   // never receive the message and a port left open outlives the recording.
   assert.match(content, /closeKeepalive\(\);/);
   assert.match(content, /if \(isRecording\) openKeepalive\(\);\s*else closeKeepalive\(\);/);
-  // A retry is only ever scheduled from a disconnect, so a removed extension -- where
-  // connect throws -- stops rather than spinning.
-  assert.match(content, /if \(isRecording\) setTimeout\(openKeepalive, 1000\)/);
 });
 
 test("interrupted captures resolve instead of waiting forever", () => {

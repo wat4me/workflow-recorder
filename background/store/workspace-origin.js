@@ -43,6 +43,17 @@ export async function readOrigin() {
   return origin?.caseId ? origin : null;
 }
 
+/** A saved baseline stays saved when continue is clicked without new steps. */
+export function savedCaseIdFor(state, actions) {
+  if (!actions.length) return null;
+  if (state.activeCaseId) return state.activeCaseId;
+  const origin = state.workspaceOrigin;
+  const original = origin?.originalActions;
+  if (!origin?.caseId || origin.deleted || !Array.isArray(original) || original.length !== actions.length) return null;
+  return original.every((step, index) => step.actionId === actions[index].id && step.signature === fingerprintOf(actions[index]))
+    ? origin.caseId : null;
+}
+
 /**
  * The origin state for a case that has just been loaded or saved.
  *

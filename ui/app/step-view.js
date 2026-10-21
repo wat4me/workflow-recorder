@@ -413,6 +413,9 @@ if (!window.RecorderStepView) {
     }
     function updateCaptureState(capture) {
       const ids = new Set([currentCapture.activeActionId, capture.activeActionId]);
+      for (const state of [currentCapture, capture]) {
+        for (const item of state.activeCaptures || []) ids.add(item.actionId);
+      }
       currentCapture = capture;
       for (const entry of cardEntries.values()) {
         if (!ids.has(entry.actionId)) continue;

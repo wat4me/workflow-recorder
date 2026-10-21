@@ -79,7 +79,7 @@ function startFixtureServer() {
         <button id="noop-action">No effect</button>
         <button id="effect-action">Visible effect</button>
         <button id="scripted-click-target">Scripted click target</button>
-        <div id="drag-source" style="position:absolute;z-index:10;left:40px;top:320px;width:100px;height:60px;background:#93c5fd;user-select:none;">Task card</div>
+        <div id="drag-source" style="position:absolute;z-index:10;left:40px;top:320px;width:100px;height:60px;background:#93c5fd;user-select:none;cursor:grab;">Task card</div>
         <div id="drop-target" style="position:absolute;z-index:10;left:260px;top:320px;width:140px;height:80px;background:#bbf7d0;">Done list</div>
         <a id="open-child" href="/child" target="_blank">Open child</a>
         <iframe id="formdesign-frame" src="/frame"></iframe>
@@ -231,6 +231,10 @@ async function waitForActions(serviceWorker, predicate, timeoutMs = LOADED_MACHI
     await new Promise(resolve => setTimeout(resolve, 50));
   }
 
+  try {
+    const debug = await serviceWorker.evaluate(() => chrome.storage.local.get("recordingDebugTimeline"));
+    fs.writeFileSync(path.join(__dirname, "..", ".local", "e2e-timeout-debug.json"), JSON.stringify(debug, null, 2));
+  } catch { /* Keep the original assertion if the failed browser has gone away. */ }
   assert.fail(`Timed out waiting for actions. Last actions: ${JSON.stringify(actions)}`);
 }
 
@@ -295,9 +299,11 @@ test("A B C tabs keep independent drafts while recorded child tabs share their p
   const show = async tabId => {
     await worker.evaluate(tabId => chrome.tabs.update(tabId, { active: true }), tabId);
     await panel.goto(`chrome-extension://${extensionId}/ui/popup.html?show=${Date.now()}`);
-    await panel.locator(".draft-toolbar").waitFor({ state: "visible" });
-    await panel.waitForFunction(() => document.getElementById("recording-draft-select").value !== "");
-    return panel.locator("#recording-draft-select").inputValue();
+    await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
+    const state = await panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), tabId);
+    assert.ok(state.draftId);
+    assert.equal(await panel.locator("#recording-draft-select").count(), 0);
+    return state.draftId;
   };
   const pressRecord = () => panel.evaluate(() => document.getElementById("record-btn").click());
   const draftA = await show(ids[0]);
@@ -336,7 +342,7 @@ test("A B C tabs keep independent drafts while recorded child tabs share their p
   const draftC = await show(ids[2]);
   assert.notEqual(draftC, draftB);
   assert.equal(await panel.locator(".step-card").count(), 0);
-  assert.equal(await panel.locator("#recording-draft-select option").count(), 3);
+  await panel.locator("#recover-recordings-btn").waitFor({ state: "visible" });
   const bState = await panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), ids[1]);
   assert.equal(bState.actions.length, 2);
   const stale = await panel.evaluate(draftId => chrome.runtime.sendMessage({ action: "clearSteps", workspaceDraftId: draftId }), draftA);
@@ -352,13 +358,15 @@ test("A B C tabs keep independent drafts while recorded child tabs share their p
   });
   await worker.evaluate(tabId => chrome.tabs.update(tabId, { active: true }), ids[0]);
   await panel.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-  await panel.waitForFunction(draftId => document.getElementById("recording-draft-select").value === draftId, draftA);
   assert.equal(await panel.evaluate(() => window.retainedDraftPanel), true, "switching back reuses the panel document");
   await panel.waitForFunction(count => document.querySelectorAll(".step-card").length === count, aState.actions.length);
   assert.match(await panel.locator("#record-btn-label").innerText(), /继续录制/);
   assert.deepEqual((await readActions(worker)).map(action => action.id), aState.actions.map(action => action.id));
   await pressRecord();
   await waitForCondition(async () => (await worker.evaluate(() => chrome.storage.local.get("isRecording"))).isRecording, "A resumed");
+  // isRecording is published before recorder injection finishes. Wait for the
+  // panel's start request to complete before exercising the resumed page.
+  await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
   await a.locator("#scripted-click-target").click();
   await waitForActions(worker, list => list.length > aState.actions.length);
   await pressRecord();
@@ -373,7 +381,8 @@ test("A B C tabs keep independent drafts while recorded child tabs share their p
   const errors = [];
   panel.on("pageerror", error => errors.push(error.message));
   await panel.setViewportSize({ width: 360, height: 800 });
-  const bounds = await panel.locator(".draft-toolbar").boundingBox();
+  assert.equal(await panel.locator("#recover-recordings-btn").isVisible(), false, "only B has unsaved steps after A is cleared");
+  const bounds = await panel.locator(".header-utilities").boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 360);
   if (process.env.DRAFT_PREVIEW_DIR) {
     const output = path.resolve(process.env.DRAFT_PREVIEW_DIR);
@@ -383,9 +392,250 @@ test("A B C tabs keep independent drafts while recorded child tabs share their p
   assert.deepEqual(errors, []);
   await b.close();
   await show(ids[2]);
-  await panel.locator("#recording-draft-select").selectOption(draftB);
+  await pressRecord();
+  await waitForActions(worker, list => list.some(action => action.type === "navigate" && action.screenshotKey));
+  await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
+  await pressRecord();
+  await waitForCondition(async () => !(await worker.evaluate(() => chrome.storage.local.get("isRecording"))).isRecording, "C paused");
+  await panel.locator("#recover-recordings-btn").waitFor({ state: "visible" });
+  await panel.locator("#recover-recordings-btn").click();
+  await panel.locator(`[data-draft-id="${draftB}"]`).click();
   await panel.waitForFunction(count => document.querySelectorAll(".step-card").length === count, bState.actions.length);
-  assert.deepEqual((await readActions(worker)).map(action => action.id), bState.actions.map(action => action.id), "a closed tab's draft can be recovered through the selector");
+  assert.deepEqual((await readActions(worker)).map(action => action.id), bState.actions.map(action => action.id), "a closed tab's recording can be recovered through the recovery entry");
+});
+
+test("recovery stays hidden until multiple unsaved recordings exist and restores without losing work", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN",
+    recordingConsentVersion: 3, captureSettings: { screenshots: false } }));
+  const pages = [];
+  for (const name of ["A", "B", "C"]) {
+    const page = await context.newPage();
+    await page.goto(`${fixture.origin}/base?recovery=${name}`);
+    await page.evaluate(name => { document.title = `录制 ${name}`; }, name);
+    pages.push(page);
+  }
+  const [a, b, c] = pages;
+  const ids = await worker.evaluate(async urls => {
+    const tabs = await chrome.tabs.query({});
+    return urls.map(url => tabs.find(tab => tab.url === url).id);
+  }, pages.map(page => page.url()));
+  const panel = await context.newPage();
+  const errors = [];
+  panel.setDefaultTimeout(15000);
+  panel.on("pageerror", error => {
+    errors.push(error.message);
+    console.error("[Recovery test] Panel error:", error.message);
+  });
+  const show = async tabId => {
+    await worker.evaluate(tabId => chrome.tabs.update(tabId, { active: true }), tabId);
+    await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+    await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
+    return panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), tabId);
+  };
+  const pressRecord = () => panel.evaluate(() => document.getElementById("record-btn").click());
+  const recordingIs = async expected => {
+    await waitForCondition(async () =>
+      (await worker.evaluate(() => chrome.storage.local.get("isRecording"))).isRecording === expected, `recording ${expected}`);
+    await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
+  };
+  const first = await show(ids[0]);
+  assert.equal(await panel.locator("#recording-draft-select").count(), 0);
+  assert.doesNotMatch(await panel.locator("body").innerText(), /当前草稿|草稿自动保留/);
+  assert.equal(await panel.locator("#recover-recordings-btn").isVisible(), false);
+  await panel.setViewportSize({ width: 360, height: 800 });
+  if (process.env.RECOVERY_PREVIEW_DIR) {
+    fs.mkdirSync(process.env.RECOVERY_PREVIEW_DIR, { recursive: true });
+    await panel.screenshot({ path: path.join(process.env.RECOVERY_PREVIEW_DIR, "default.png") });
+  }
+  await pressRecord();
+  await waitForActions(worker, actions => actions.some(action => action.type === "navigate"));
+  await recordingIs(true);
+  assert.equal(await panel.locator("#recover-recordings-btn").isVisible(), false, "one recording adds no recovery UI");
+  await pressRecord();
+  await recordingIs(false);
+  const aActions = await readActions(worker);
+  const second = await show(ids[1]);
+  assert.equal(await panel.locator("#recover-recordings-btn").isVisible(), false, "an empty draft does not count");
+  await pressRecord();
+  await waitForActions(worker, actions => actions.some(action => action.type === "navigate"));
+  await recordingIs(true);
+  await panel.locator("#recover-recordings-btn").waitFor({ state: "visible" });
+  assert.equal(await panel.locator("#recording-recovery-panel").isVisible(), false, "recovery remains collapsed until requested");
+  await pressRecord();
+  await recordingIs(false);
+  const saved = await panel.evaluate(() => chrome.runtime.sendMessage({ action: "saveCase", name: "已保存录制 B" }));
+  assert.equal(saved.success, true);
+  await panel.locator("#recover-recordings-btn").waitFor({ state: "hidden" });
+  await pressRecord();
+  await recordingIs(true);
+  assert.equal(await panel.locator("#recover-recordings-btn").isVisible(), false, "continuing a saved baseline alone does not make it unsaved");
+  await b.locator("#scripted-click-target").click();
+  await waitForActions(worker, actions => actions.some(action => action.target?.id === "scripted-click-target"));
+  await panel.locator("#recover-recordings-btn").waitFor({ state: "visible" });
+  await panel.locator("#recover-recordings-btn").click();
+  assert.equal(await panel.locator("#recover-recordings-btn").getAttribute("aria-expanded"), "true");
+  await panel.locator("#close-recording-recovery-btn").click();
+  assert.equal(await panel.locator("#recording-recovery-panel").isVisible(), false);
+  assert.equal(await panel.evaluate(() => document.activeElement.id), "recover-recordings-btn");
+  await panel.locator("#recover-recordings-btn").click();
+  await panel.locator(".steps-section-head h2").click();
+  assert.equal(await panel.locator("#recording-recovery-panel").isVisible(), false, "clicking outside closes the list");
+  await panel.locator("#recover-recordings-btn").click();
+  // Hold just the recovery request so loading feedback can be verified without
+  // adding a fake delay to the product or depending on the worker's speed.
+  await panel.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.recoveryTest = { failOnce: true };
+    chrome.runtime.sendMessage = (message, ...args) => {
+      if (message.action === "selectDraft") {
+        if (window.recoveryTest.failOnce) {
+          window.recoveryTest.failOnce = false;
+          queueMicrotask(() => args.at(-1)({ success: false, error: "测试恢复失败，请重试" }));
+        } else {
+          window.recoveryTest.release = () => {
+            chrome.runtime.sendMessage = original;
+            return original(message, ...args);
+          };
+        }
+        return;
+      }
+      return original(message, ...args);
+    };
+  });
+  await panel.locator(`[data-draft-id="${first.draftId}"]`).click();
+  await panel.locator(".recorder-toast.danger").filter({ hasText: "测试恢复失败" }).waitFor();
+  await panel.waitForFunction(() => !document.querySelector(".recording-recovery-item").disabled);
+  assert.equal(await panel.locator("#recording-recovery-panel").isVisible(), true, "failure leaves the list open for retry");
+  assert.equal((await worker.evaluate(() => chrome.storage.local.get("activeRecordingDraftId"))).activeRecordingDraftId, second.draftId);
+  await panel.locator(`[data-draft-id="${first.draftId}"]`).click();
+  await panel.waitForFunction(() => document.getElementById("recording-recovery-panel").getAttribute("aria-busy") === "true");
+  assert.equal(await panel.locator(".recorder-toast.danger").count(), 0, "retry clears the earlier failure message");
+  assert.match(await panel.locator(".is-recovering .recording-recovery-action").innerText(), /恢复中/);
+  assert.equal(await panel.locator(".recording-recovery-item:disabled").count(), 1);
+  await panel.evaluate(() => { window.recoveringRow = document.querySelector(".is-recovering"); });
+  await worker.evaluate(() => chrome.storage.local.set({ screenshotCaptureState: { busy: false, updatedAt: Date.now() } }));
+  assert.equal(await panel.evaluate(() => window.recoveringRow === document.querySelector(".is-recovering")), true,
+    "storage refreshes preserve loading feedback");
+  if (process.env.RECOVERY_PREVIEW_DIR) {
+    await panel.screenshot({ path: path.join(process.env.RECOVERY_PREVIEW_DIR, "recovering.png") });
+  }
+  await panel.locator("#close-recording-recovery-btn").click();
+  assert.equal(await panel.locator("#recording-recovery-panel").isVisible(), false, "the list can also close while recovery is pending");
+  await panel.locator("#recover-recordings-btn").click();
+  assert.equal(await panel.locator(".is-recovering").count(), 1);
+  await panel.evaluate(() => window.recoveryTest.release());
+  await recordingIs(false);
+  await panel.waitForFunction(count => document.querySelectorAll(".step-card").length === count, aActions.length);
+  assert.deepEqual((await readActions(worker)).map(action => action.id), aActions.map(action => action.id));
+  await panel.locator("#recording-recovery-panel").waitFor({ state: "hidden" });
+  await panel.locator(".recorder-toast:not(.danger)").filter({ hasText: "已恢复「录制 A」（1 个步骤）" }).waitFor();
+  assert.equal(await panel.evaluate(() => document.activeElement.id), "record-btn");
+  if (process.env.RECOVERY_PREVIEW_DIR) {
+    await panel.screenshot({ path: path.join(process.env.RECOVERY_PREVIEW_DIR, "recovered.png") });
+  }
+  const retainedB = await panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), ids[1]);
+  // B's old recording is now unbound because A was deliberately recovered into B.
+  const bSnapshot = await worker.evaluate(id => chrome.storage.local.get(`recordingDraft:${id}`), second.draftId);
+  const bActions = bSnapshot[`recordingDraft:${second.draftId}`].actions;
+  assert.ok(bActions.some(action => action.target?.id === "scripted-click-target"), "recovery keeps B's unsaved changes");
+  assert.equal(retainedB.draftId, first.draftId);
+  await a.close();
+  await b.close();
+  await show(ids[2]);
+  await panel.locator("#recover-recordings-btn").waitFor({ state: "visible" });
+  await panel.locator("#recover-recordings-btn").click();
+  assert.equal(await panel.locator(".recording-recovery-item").count(), 2);
+  for (const selector of ["#recover-recordings-btn", "#recording-recovery-panel"]) {
+    const bounds = await panel.locator(selector).boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 360, `${selector} fits a narrow panel`);
+  }
+  if (process.env.RECOVERY_PREVIEW_DIR) {
+    await panel.screenshot({ path: path.join(process.env.RECOVERY_PREVIEW_DIR, "recovery.png") });
+  }
+  await panel.keyboard.press("Escape");
+  assert.equal(await panel.locator("#recording-recovery-panel").isVisible(), false);
+  assert.equal(await panel.locator("#recover-recordings-btn").getAttribute("aria-expanded"), "false");
+  await panel.locator("#recover-recordings-btn").click();
+  await panel.locator(`[data-draft-id="${second.draftId}"]`).click();
+  await panel.waitForFunction(count => document.querySelectorAll(".step-card").length === count, bActions.length);
+  assert.deepEqual((await readActions(worker)).map(action => action.id), bActions.map(action => action.id), "closed-tab recordings stay recoverable");
+  assert.equal((await readCases(worker)).length, 1, "recovery does not create cases");
+  assert.equal(c.isClosed(), false);
+  assert.deepEqual(errors, []);
+});
+
+test("retention automatically discards the oldest recording at eleven while preserving active work and saved-case media", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(async () => {
+    const writes = { isRecording: false, uiLanguage: "zh_CN", recordingConsentVersion: 3,
+      captureSettings: { screenshots: false }, recordingDraftIndex: [],
+      caseIndex: [{ id: "retention-saved", name: "保留的用例", createdAt: 1, stepCount: 1, readable: true }],
+      "case:retention-saved": { id: "retention-saved", actions: [{ id: "saved-step", type: "click", screenshotKey: "retention-shared" }], pages: [] },
+      "caseMedia:retention-saved": ["retention-shared"] };
+    for (let number = 1; number <= 10; number++) {
+      const id = `retained-${number}`;
+      writes.recordingDraftIndex.push({ id, tabIds: [], title: `历史录制 ${number}`, stepCount: 1, savedCaseId: null, updatedAt: number });
+      const actions = [{ id: `old-step-${number}`, type: "click" }];
+      if (number === 1) Object.assign(actions[0], { screenshotKey: "retention-old", screenshotBeforeKey: "retention-shared" });
+      writes[`recordingDraft:${id}`] = { actions, state: {} };
+      writes[`recordingDraftMedia:${id}`] = number === 1 ? ["retention-old", "retention-shared"] : [];
+    }
+    await chrome.storage.local.set(writes);
+    await RecorderMediaStore.withWriteLock(async () => {
+      await RecorderMediaStore.putBlob("retention-old", new Blob(["discarded screenshot"]));
+      await RecorderMediaStore.putBlob("retention-shared", new Blob(["shared saved screenshot"]));
+    });
+  });
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base?retention=live`);
+  const tabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url).id, page.url());
+  const panel = await context.newPage();
+  panel.setDefaultTimeout(15000);
+  const errors = [];
+  panel.on("pageerror", error => errors.push(error.message));
+  await worker.evaluate(tabId => chrome.tabs.update(tabId, { active: true }), tabId);
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
+  const before = await worker.evaluate(() => chrome.storage.local.get(["recordingDraftIndex", "activeRecordingDraftId"]));
+  assert.equal(before.recordingDraftIndex.length, 11, "opening an empty draft does not discard a recording");
+  assert.equal(before.recordingDraftIndex[0].id, "retained-1");
+  await panel.evaluate(() => document.getElementById("record-btn").click());
+  await waitForActions(worker, actions => actions.some(action => action.type === "navigate"));
+  await waitForCondition(async () => {
+    const state = await worker.evaluate(() => chrome.storage.local.get("recordingDraftIndex"));
+    return state.recordingDraftIndex.length === 10 && !state.recordingDraftIndex.some(draft => draft.id === "retained-1");
+  }, "automatic ten-recording retention");
+  await waitForCondition(async () => !(await worker.evaluate(() => RecorderMediaStore.getBlob("retention-old"))), "discarded screenshot cleanup");
+  const after = await worker.evaluate(() => chrome.storage.local.get(["recordingDraftIndex", "activeRecordingDraftId", "isRecording",
+    "recordingDraft:retained-1", "recordingDraftMedia:retained-1", "case:retention-saved"]));
+  assert.equal(after.activeRecordingDraftId, before.activeRecordingDraftId);
+  assert.equal(after.isRecording, true, "retention does not stop the active recording");
+  assert.equal(after["recordingDraft:retained-1"], undefined);
+  assert.equal(after["recordingDraftMedia:retained-1"], undefined);
+  assert.equal(after["case:retention-saved"].actions[0].screenshotKey, "retention-shared");
+  assert.equal(await worker.evaluate(async () => (await RecorderMediaStore.getBlob("retention-shared"))?.text()), "shared saved screenshot");
+  const current = await panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), tabId);
+  assert.equal(current.drafts.filter(draft => draft.hasUnsavedChanges).length, 10);
+  assert.equal(current.actions.length, 1);
+  assert.equal((await readCases(worker)).length, 1);
+  assert.deepEqual(errors, []);
 });
 
 test("opening the panel fits only the top frame without starting recording or repeated zoom", async (t) => {
@@ -1217,7 +1467,7 @@ test("step header controls share one center line in the recorder and preview", a
   assert.equal(await preview.locator(".step-select-checkbox, .step-delete-btn").count(), 0);
 });
 
-test("recording download fits the toolbar and works as text or an icon", async (t) => {
+test("recording download fits the icon toolbar and stays available at every width", async (t) => {
   const extensionPath = path.resolve(__dirname, "..");
   const context = await chromium.launchPersistentContext("", {
     channel: "chromium",
@@ -1270,7 +1520,7 @@ test("recording download fits the toolbar and works as text or an icon", async (
     const downloadWidths = new Map();
     for (const width of [1000, 561, 560, 420, 380, 360, 340, 330, 320, 300, 1000]) {
       await panel.setViewportSize({ width, height: 720 });
-      // Wait for both layout and the ResizeObserver-driven label measurement.
+      // Wait for the responsive toolbar layout.
       await panel.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const narrow = width <= 560;
       assert.equal(await download.isVisible(), narrow);
@@ -1286,7 +1536,7 @@ test("recording download fits the toolbar and works as text or an icon", async (
             buttonRect.right <= utilities.left && utilities.right <= innerWidth &&
             record.scrollWidth <= record.clientWidth && button.scrollWidth <= button.clientWidth &&
             Math.abs(recordRect.top - buttonRect.top) < 1,
-          labelVisible: !!label && getComputedStyle(label).display !== "none",
+          labelVisible: !!label && label.getBoundingClientRect().width > 1 && getComputedStyle(label).display !== "none",
           title: button.title,
           accessibleName: button.getAttribute("aria-label")
         };
@@ -1296,7 +1546,7 @@ test("recording download fits the toolbar and works as text or an icon", async (
       if (narrow) {
         assert.equal(layout.title, name);
         assert.equal(layout.accessibleName, name);
-        if (width === 560) assert.equal(layout.labelVisible, true);
+        assert.equal(layout.labelVisible, false);
         downloadWidths.set(layout.labelVisible, width);
       } else {
         await more.click();
@@ -1307,7 +1557,7 @@ test("recording download fits the toolbar and works as text or an icon", async (
       }
     }
 
-    assert.equal(downloadWidths.has(true), true);
+    assert.equal(downloadWidths.has(true), false);
     iconDownloadChecked ||= downloadWidths.has(false);
     for (const width of [1000, ...downloadWidths.values()]) {
       await panel.setViewportSize({ width, height: 720 });
@@ -1371,7 +1621,7 @@ test("recording download fits the toolbar and works as text or an icon", async (
   assert.deepEqual(errors, []);
 });
 
-test("recording controls use the light theme and expose screenshot labels responsively", async (t) => {
+test("recording controls use the light theme and expose icon descriptions at every width", async (t) => {
   const extensionPath = path.resolve(__dirname, "..");
   const context = await chromium.launchPersistentContext("", {
     channel: "chromium",
@@ -1415,7 +1665,10 @@ test("recording controls use the light theme and expose screenshot labels respon
         };
       });
       assert.equal(layout.fits, true, `${language} screenshot control fits at ${width}px: ${JSON.stringify(layout)}`);
-      if (width === 1000) assert.equal(layout.iconOnly, false);
+      assert.equal(layout.iconOnly, true);
+      assert.ok(await panel.locator("#record-btn").evaluate(button =>
+        button.clientWidth <= 36 && button.title === button.getAttribute("aria-label") &&
+        button.title === globalThis.RecorderI18n.t("stopRecording")));
       checkedIcon ||= layout.iconOnly;
       const label = language === "zh_CN" ? "更新操作后截图" : "Update after-action screenshot";
       assert.equal(await manual.getAttribute("aria-label"), label);
@@ -1423,7 +1676,7 @@ test("recording controls use the light theme and expose screenshot labels respon
       assert.match(await manual.getAttribute("title"), /当前页面最后一个操作.*不改变操作前截图|last operation on the current page, without changing its before-action screenshot/);
     }
   }
-  assert.equal(checkedIcon, true, "a narrow panel collapses the screenshot label");
+  assert.equal(checkedIcon, true, "the screenshot action always uses its icon");
 
   async function checkHover(page, selector, enabled = true) {
     const button = page.locator(selector).first();
@@ -1482,7 +1735,7 @@ test("recording controls use the light theme and expose screenshot labels respon
       color: getComputedStyle(button).color
     })), { background, color: "rgb(255, 255, 255)" });
   }
-  assert.equal(await panel.locator(".copy-task-info").evaluate(button => getComputedStyle(button).color), "rgb(255, 255, 255)");
+  assert.equal(await panel.locator(".copy-task-info").evaluate(button => getComputedStyle(button).color), await tokenBackground("--text-muted"));
   for (const selector of ["#record-btn", "#save-current-case-btn", "#copy-task-btn", "#more-actions-btn", "#open-console-btn", "#language-btn", ".copy-task-info"]) {
     await checkHover(panel, selector);
   }
@@ -1509,6 +1762,11 @@ test("recording controls use the light theme and expose screenshot labels respon
   })), { background: await tokenBackground("--danger-color"), color: "rgb(255, 255, 255)" });
   await panel.locator(".confirm-cancel").click();
   await checkLightSurface(panel, "#copy-task-tooltip");
+  if (process.env.CAPTURE_RECORDER_ICONS === "1") {
+    await panel.evaluate(() => globalThis.RecorderI18n.setLanguage("zh_CN"));
+    await panel.mouse.move(0, 0);
+    await panel.screenshot({ path: path.join(__dirname, "..", ".local", "recorder-icon-controls.png") });
+  }
 
   // Motion is opt-in to the normal preference, not required for visible hover.
   await panel.emulateMedia({ reducedMotion: "no-preference" });
@@ -1908,6 +2166,225 @@ test("clearing steps leaves saved cases intact and waits for an explicit start",
   );
 });
 
+test("input recording ignores unchanged fields and editor fillers while preserving a real clear", async t => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ recordingConsentVersion: 3, captureSettings: { screenshots: false } }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base`);
+  await page.evaluate(() => {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = '<input id="filler-input"><input id="unchanged-input" value="existing">' +
+      '<div id="filler-editor" contenteditable="true" role="textbox" aria-label="输入内容" style="min-height:30px;border:1px solid">\u200b</div>';
+    wrap.querySelector("input").value = "\u200b";
+    document.body.prepend(wrap);
+  });
+  const tabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url)?.id, page.url());
+  const controller = await context.newPage();
+  await controller.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  const toggle = (start, recordingMode) => controller.evaluate(({ tabId, start, recordingMode }) =>
+    chrome.runtime.sendMessage({ action: "toggleRecording", start, rootTabId: tabId, recordingMode }), { tabId, start, recordingMode });
+  assert.equal((await toggle(true)).success, true);
+  await waitForActions(worker, actions => actions.length === 1);
+  await page.bringToFront();
+  for (const selector of ["#filler-input", "#unchanged-input", "#filler-editor", "#query"]) {
+    await page.locator(selector).click();
+  }
+  assert.equal((await toggle(false)).success, true);
+  assert.equal((await readActions(worker)).length, 1, "click/blur of an unchanged field adds no typing step");
+  assert.equal((await toggle(true, "continue")).success, true);
+  await page.locator("#filler-editor").fill("visible content");
+  await page.locator("#query").fill("separate step");
+  await waitForActions(worker, actions => actions.some(action => action.value === "visible content") &&
+    actions.some(action => action.value === "separate step"));
+  await page.locator("#filler-editor").fill("\u200b");
+  assert.equal((await toggle(false)).success, true);
+  const actions = await readActions(worker);
+  assert.ok(actions.some(action => action.type === "type" && action.target?.id === "filler-editor" && action.value === ""),
+    "clearing a populated editor back to its filler is still recorded");
+  assert.equal(actions.some(action => action.type === "type" && action.value === "\u200b"), false);
+});
+
+test("stopping releases the debugger before slow saves and preserves final iframe input", async t => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ uiLanguage: "zh_CN", recordingConsentVersion: 3 }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base`);
+  const tabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url)?.id, page.url());
+  const panel = await context.newPage();
+  const errors = [];
+  panel.on("pageerror", error => errors.push(error.message));
+  await panel.setViewportSize({ width: 300, height: 720 });
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await panel.locator("#capture-settings-btn").click();
+  assert.equal(await panel.locator(".capture-settings-dialog").isVisible(), true);
+  assert.equal(await panel.locator(".recording-debug-tools, #export-recording-debug, #clear-recording-debug").count(), 0);
+  await panel.locator(".capture-settings-dialog .confirm-cancel").click();
+  await panel.evaluate(tabId => chrome.runtime.sendMessage({ action: "toggleRecording", start: true, rootTabId: tabId }), tabId);
+  await waitForActions(worker, actions => actions.some(action => action.screenshotKey));
+  await panel.waitForFunction(() => document.querySelector("#record-btn").getAttribute("aria-label") === "停止录制");
+  await worker.evaluate(() => {
+    const putBlob = RecorderMediaStore.putBlob.bind(RecorderMediaStore);
+    const gate = new Promise(resolve => { globalThis.releaseStopSaves = resolve; });
+    globalThis.heldStopSaves = 0;
+    RecorderMediaStore.putBlob = async (key, blob) => {
+      const id = key.split(":")[1];
+      const action = (await chrome.storage.local.get(`action:${id}`))[`action:${id}`];
+      if (action && key !== action.screenshotBeforeKey) {
+        globalThis.heldStopSaves++;
+        await gate;
+      }
+      return putBlob(key, blob);
+    };
+  });
+  await page.bringToFront();
+  await page.locator("#query").fill("final top input");
+  await page.frameLocator("#cke-editor-frame").locator("body").fill("final iframe input");
+  await panel.locator("#record-btn").click();
+  await panel.waitForFunction(() => document.querySelector("#record-btn").title === "正在停止…");
+  assert.equal(await panel.locator("#record-btn").isDisabled(), true);
+  assert.equal(await panel.locator("#manual-screenshot-btn").isHidden(), true);
+  assert.ok(await panel.locator("#record-btn-label").isVisible());
+  assert.ok(await panel.locator(".header-utilities").evaluate(element => element.getBoundingClientRect().right <= innerWidth));
+  try {
+    await waitForCondition(() => worker.evaluate(tabId => chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: "1" })
+      .then(() => false, () => true), tabId), "debugger release before the blocked saves finish");
+    await waitForCondition(() => worker.evaluate(() => globalThis.heldStopSaves > 0), "media saves to remain blocked after detach");
+    const pending = await readActions(worker);
+    assert.ok(pending.some(action => action.value === "final top input"));
+    assert.ok(pending.some(action => action.value === "final iframe input"));
+    assert.equal(await panel.locator("#record-btn").isDisabled(), true);
+    // Reload/activation during local persistence must not reattach the debugger.
+    await page.bringToFront();
+    await page.reload();
+    assert.equal(await worker.evaluate(tabId => chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: "1" })
+      .then(() => true, () => false), tabId), false);
+  } finally {
+    await worker.evaluate(() => globalThis.releaseStopSaves());
+  }
+  await panel.waitForFunction(() => !document.querySelector("#record-btn").disabled &&
+    document.querySelector("#record-btn").getAttribute("aria-label") === "继续录制");
+  const saved = await readActions(worker);
+  for (const value of ["final top input", "final iframe input"]) {
+    assert.equal(saved.find(action => action.value === value).screenshotStatus, "captured");
+  }
+  assert.equal(await worker.evaluate(async () => (await chrome.storage.local.get("recordingDebugTimeline")).recordingDebugTimeline), undefined);
+  await panel.locator("#record-btn").click();
+  await panel.waitForFunction(() => !document.querySelector("#record-btn").disabled && document.querySelector("#record-btn").title === "停止录制");
+  await page.bringToFront();
+  await page.locator("#query").fill("continued after stop");
+  await page.locator("#effect-action").click();
+  await waitForActions(worker, actions => actions.some(action => action.value === "continued after stop"));
+  await panel.locator("#record-btn").click();
+  await panel.waitForFunction(() => document.querySelector("#record-btn").title === "继续录制");
+  assert.deepEqual(errors, []);
+});
+
+test("screenshot queues let a ready child finish while its parent is still loading", async t => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ uiLanguage: "zh_CN", recordingConsentVersion: 3 }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base`);
+  const rootTabId = await worker.evaluate(async url =>
+    (await chrome.tabs.query({})).find(tab => tab.url === url)?.id, page.url());
+  const controller = await context.newPage();
+  await controller.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  assert.equal((await controller.evaluate(rootTabId => chrome.runtime.sendMessage({
+    action: "toggleRecording", start: true, rootTabId
+  }), rootTabId)).success, true);
+  await controller.close();
+  await waitForActions(worker, actions => actions.some(action => action.screenshotKey));
+  const childPromise = context.waitForEvent("page");
+  await page.locator("#open-child").click();
+  const child = await childPromise;
+  await child.waitForLoadState("domcontentloaded");
+  try {
+    await waitForRecorder(worker, child.url());
+  } catch (error) {
+    t.diagnostic(JSON.stringify(await worker.evaluate(async () => ({
+      tabs: (await chrome.tabs.query({})).map(({ id, openerTabId, url }) => ({ id, openerTabId, url })),
+      state: await chrome.storage.local.get(["isRecording", "recordingTabIds", "tabsMapping", "recordingDebugTimeline"])
+    }))));
+    throw error;
+  }
+  await child.locator("#child-action").click();
+  await waitForActions(worker, actions => actions.some(action => action.target?.id === "child-action" && action.screenshotKey));
+  await waitForCondition(async () => !(await worker.evaluate(async () =>
+    (await chrome.storage.local.get("screenshotCaptureState")).screenshotCaptureState?.pendingCount)), "initial captures to drain");
+
+  await page.evaluate(() => {
+    const button = document.createElement("button");
+    button.id = "hold-loading";
+    button.textContent = "Load parent result";
+    button.onclick = () => {
+      document.body.setAttribute("aria-busy", "true");
+      document.body.style.backgroundColor = "rgb(255, 0, 0)";
+    };
+    document.body.prepend(button);
+  });
+  await page.bringToFront();
+  await page.locator("#hold-loading").click();
+  await waitForActions(worker, actions => actions.some(action => action.target?.id === "hold-loading" && action.screenshotStatus === "pending"));
+  await child.bringToFront();
+  await child.locator("#child-resume-action").click();
+  const concurrent = await waitForActions(worker, actions => actions.some(action =>
+    action.target?.id === "child-resume-action" && action.screenshotKey));
+  assert.equal(await page.locator("body").getAttribute("aria-busy"), "true");
+  assert.equal(concurrent.find(action => action.target?.id === "hold-loading").screenshotStatus, "pending",
+    "the child capture must finish before the loading parent capture");
+
+  await page.evaluate(() => {
+    document.body.removeAttribute("aria-busy");
+    document.body.style.backgroundColor = "rgb(0, 255, 0)";
+  });
+  const completed = await waitForActions(worker, actions => actions.some(action => action.target?.id === "hold-loading" && action.screenshotKey));
+  const parent = completed.find(action => action.target?.id === "hold-loading");
+  assert.equal(parent.screenshotCapturedTabId, rootTabId);
+  const pixel = await worker.evaluate(async key => {
+    const bitmap = await createImageBitmap(await RecorderMediaStore.getBlob(key));
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return [...ctx.getImageData(20, 500, 1, 1).data];
+  }, parent.screenshotKey);
+  assert.ok(pixel[1] > 200 && pixel[0] < 50 && pixel[2] < 50,
+    `parent screenshot must show the green loaded result: ${pixel}`);
+  const stopController = await context.newPage();
+  await stopController.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  const stopped = await stopController.evaluate(() => chrome.runtime.sendMessage({ action: "toggleRecording", start: false }));
+  assert.equal(stopped.success, true);
+  const capture = await worker.evaluate(async () => (await chrome.storage.local.get("screenshotCaptureState")).screenshotCaptureState);
+  assert.equal(capture.pendingCount, 0);
+  assert.equal(capture.busy, false);
+});
+
 test("records only the session-opening page navigation", async (t) => {
   const fixture = await startFixtureServer();
   t.after(() => fixture.close());
@@ -2023,7 +2500,7 @@ test("records only the session-opening page navigation", async (t) => {
     { frameId: 0 }
   ), rootTabId);
   assert.equal(stability.stable, true);
-  assert.ok(stability.waitedMs >= 300);
+  assert.ok(Date.now() - stability.lastChangeAt >= 300, JSON.stringify(stability));
   assert.equal(await page.locator("#async-result").innerText(), "Loaded result");
 
   // Reloads and redirects are browser/application effects, not user steps.
@@ -2951,6 +3428,139 @@ test("a paused recording re-adopts the window it opened before the pause", async
     [...new Set(bothPages.map(action => action.pageName))].sort(),
     ["page1", childPageName]
   );
+});
+
+test("recording debug export explains filtered backgrounds and valid custom controls without input values", async (t) => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  // Run this diagnostic-only flow against an explicit opt-in copy. The shared
+  // extension must keep diagnostics disabled and its settings controls hidden.
+  const sourceRoot = path.resolve(__dirname, "..");
+  const localRoot = path.join(sourceRoot, ".local");
+  fs.mkdirSync(localRoot, { recursive: true });
+  const extensionPath = fs.mkdtempSync(path.join(localRoot, "debug-extension-"));
+  for (const entry of ["manifest.json", "_locales", "background", "content", "shared", "ui", "icons", "vendor"]) {
+    fs.cpSync(path.join(sourceRoot, entry), path.join(extensionPath, entry), { recursive: true });
+  }
+  const protocolPath = path.join(extensionPath, "shared", "protocol.js");
+  fs.writeFileSync(protocolPath, fs.readFileSync(protocolPath, "utf8")
+    .replace("const RECORDING_DEBUG_ENABLED = false;", "const RECORDING_DEBUG_ENABLED = true;"));
+  fs.mkdirSync(path.join(extensionPath, ".local"));
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(async () => {
+    try {
+      const worker = context.serviceWorkers()[0];
+      if (worker) {
+        const debug = await worker.evaluate(() => chrome.storage.local.get("recordingDebugTimeline"));
+        fs.writeFileSync(path.join(extensionPath, ".local", "background-filter-test-debug.json"), JSON.stringify(debug, null, 2));
+      }
+    } finally {
+      await context.close();
+      const resolved = path.resolve(extensionPath);
+      assert.equal(path.dirname(resolved), localRoot);
+      assert.ok(path.basename(resolved).startsWith("debug-extension-"));
+      fs.rmSync(resolved, { recursive: true, force: true });
+    }
+  });
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  await worker.evaluate(() => chrome.storage.local.set({ isRecording: false, captureSettings: { screenshots: false } }));
+  const page = await context.newPage();
+  await page.goto(`${fixture.origin}/base?token=debug-private-token`);
+  await page.evaluate(() => {
+    document.body.innerHTML = `<input id="debug-account" value="private-input-value">
+      <ul><li id="login-background" style="width:300px;height:80px;user-select:none">Background</li></ul>
+      <div id="carousel" style="width:300px;height:30px">Carousel</div>
+      <div id="debug-dialog"><span id="debug-close">Close dialog</span></div>
+      <div id="debug-drag" class="drag-item" style="width:100px;height:50px;user-select:none">Drag card</div>
+      <div id="debug-js-drag" style="position:relative;left:0;width:100px;height:50px;user-select:none">JS drag card</div>`;
+    document.querySelector("#debug-close").addEventListener("click", () => document.querySelector("#debug-dialog").remove());
+    document.querySelector("#debug-account").addEventListener("focus", () => {
+      document.querySelector("#carousel").style.backgroundColor = "white";
+    });
+    let dragStart = null;
+    const card = document.querySelector("#debug-js-drag");
+    card.addEventListener("mousedown", event => { dragStart = event.clientX; });
+    document.addEventListener("mousemove", event => {
+      if (dragStart !== null) card.style.left = `${event.clientX - dragStart}px`;
+    });
+    document.addEventListener("mouseup", () => { dragStart = null; });
+    window.addEventListener("resize", () => {
+      document.querySelector("#carousel").style.width = `${window.innerWidth}px`;
+      const replacement = document.createElement("span");
+      replacement.textContent = "Responsive background";
+      document.querySelector("#carousel").replaceChildren(replacement);
+    });
+  });
+  const rootTabId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url).id, page.url());
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/popup.html`);
+  await panel.locator("#capture-settings-btn").click();
+  await panel.locator("#clear-recording-debug").click();
+  await panel.locator(".confirm-cancel").click();
+  const toggle = start => panel.evaluate(({ tabId, start }) => chrome.runtime.sendMessage({ action: "toggleRecording", start, rootTabId: tabId }), { tabId: rootTabId, start });
+  assert.equal((await toggle(true)).success, true);
+  await page.bringToFront();
+  await page.locator("#login-background").click();
+  await page.setViewportSize({ width: 1100, height: 760 });
+  const getLog = () => panel.evaluate(() => chrome.runtime.sendMessage({ action: "exportRecordingDebug" }));
+  await waitForCondition(async () => (await getLog()).log.events.some(entry => entry.event === "click-decision"), "inert click debug decision");
+  assert.equal((await getLog()).log.events.find(entry => entry.event === "click-decision").detail.decision, "filtered");
+  await page.evaluate(() => {
+    window.debugBackgroundTimer = setInterval(() => {
+      const background = document.querySelector("#login-background");
+      background.setAttribute("class", background.className === "active" ? "next-slide" : "active");
+      background.setAttribute("class", background.className);
+    }, 80);
+  });
+  for (let i = 0; i < 7; i++) await page.locator("#login-background").click();
+  await page.locator("#debug-account").focus();
+  await waitForCondition(async () => (await getLog()).log.events.filter(entry => entry.event === "click-decision").length >= 8, "rapid background clicks finish validation");
+  await page.evaluate(() => clearInterval(window.debugBackgroundTimer));
+  assert.equal((await readActions(worker)).filter(action => action.type === "click").length, 0);
+  await page.locator("#login-background").hover({ position: { x: 20, y: 20 } });
+  await page.mouse.down();
+  await page.mouse.move(100, 80, { steps: 3 });
+  await page.mouse.up();
+  await waitForCondition(async () => (await getLog()).log.events.some(entry => entry.event === "drag-filtered"), "background drag rejected");
+  await page.locator("#debug-close").click();
+  await waitForActions(worker, list => list.some(action => action.target?.id === "debug-close"));
+  await page.locator("#debug-drag").hover({ position: { x: 20, y: 20 } });
+  await page.mouse.down();
+  await page.mouse.move(180, 230, { steps: 3 });
+  await page.mouse.up();
+  await waitForCondition(async () => (await getLog()).log.events.some(entry => entry.event === "drag-recorded"), "real control drag debug evidence");
+  const jsCard = page.locator("#debug-js-drag");
+  const jsBox = await jsCard.boundingBox();
+  await jsCard.hover({ position: { x: 20, y: 20 } });
+  await page.mouse.down();
+  await page.mouse.move(jsBox.x + 80, jsBox.y + 20, { steps: 4 });
+  await page.mouse.up();
+  await waitForActions(worker, list => list.some(action => action.type === "drag" && action.source?.id === "debug-js-drag"));
+  assert.equal((await toggle(false)).success, true);
+  await panel.bringToFront();
+  await panel.setViewportSize({ width: 420, height: 820 });
+  await panel.locator("#capture-settings-btn").click();
+  const downloadPromise = panel.waitForEvent("download");
+  await panel.locator("#export-recording-debug").click();
+  const download = await downloadPromise;
+  assert.match(download.suggestedFilename(), /^workflow-recorder-debug-.*\.json$/);
+  const output = path.join(extensionPath, ".local", "recording-debug-export.json");
+  await download.saveAs(output);
+  const exported = JSON.parse(fs.readFileSync(output, "utf8"));
+  const recorded = exported.events.find(entry => entry.event === "click-decision" && entry.detail.decision === "recorded");
+  const domResult = exported.events.find(entry => entry.event === "click-dom-result" && entry.detail.clickId === recorded.detail.clickId);
+  assert.equal(recorded.detail.evidence.domChanged, true);
+  assert.ok(domResult.detail.acceptedMutations.some(sample => sample.type === "childList"));
+  assert.equal(exported.events.filter(entry => entry.event === "click-decision" && entry.detail.decision === "recorded").length, 1);
+  assert.ok(exported.events.some(entry => entry.event === "viewport-resize" && entry.detail.viewport.width === 1100));
+  assert.ok(exported.events.some(entry => entry.event === "debugger-attached"));
+  assert.doesNotMatch(JSON.stringify(exported), /private-input-value|debug-private-token/);
+  await panel.screenshot({ path: path.join(extensionPath, ".local", "recording-debug-settings.png") });
+  await panel.locator("#clear-recording-debug").click();
+  assert.equal((await getLog()).log.events.length, 0);
 });
 
 test("unannotated JS close controls record their effect while inert and synthetic clicks stay filtered", async (t) => {

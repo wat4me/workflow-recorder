@@ -25,6 +25,15 @@ test("cross-context messages have one unique vocabulary", () => {
   assert.equal(protocol.MESSAGE.deleteSteps, "deleteSteps");
 });
 
+test("shared builds disable recording diagnostics and send no diagnostic events", () => {
+  const events = [];
+  const protocol = loadProtocol();
+  assert.equal(protocol.RECORDING_DEBUG_ENABLED, false);
+  protocol.setRecordingDebugSink(entry => events.push(entry));
+  protocol.recordingDebug("click-candidate", { target: "div" });
+  assert.deepEqual(events, []);
+});
+
 test("every gate that drops a click names its reason in one vocabulary", () => {
   const logged = [];
   const protocol = loadProtocol(logged);

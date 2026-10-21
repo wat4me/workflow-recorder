@@ -25,40 +25,65 @@ document.addEventListener("DOMContentLoaded", async () => {
     moreActionsMenu: document.getElementById("more-actions-menu"),
     copyTaskBtn: document.getElementById("copy-task-btn"),
     saveCurrentCaseBtn: document.getElementById("save-current-case-btn"),
-    draftSelect: document.getElementById("recording-draft-select"),
-    draftStatus: document.getElementById("recording-draft-status")
+    recoverRecordingsBtn: document.getElementById("recover-recordings-btn"),
+    closeRecoveryBtn: document.getElementById("close-recording-recovery-btn"),
+    recoveryPanel: document.getElementById("recording-recovery-panel"),
+    recoveryList: document.getElementById("recording-recovery-list")
   };
 
   const openConsoleBtn = document.getElementById("open-console-btn");
   const compactLayout = matchMedia("(max-width: 560px)");
 
-  function fitToolbarLabels() {
-    const { recordBtn, manualScreenshotBtn, downloadDocCompactBtn } = elements;
+  function updateToolbarLayout() {
     if (compactLayout.matches) {
       elements.moreActionsMenu.hidden = true;
       elements.moreActionsBtn.setAttribute("aria-expanded", "false");
     }
-    const button = !manualScreenshotBtn.hidden ? manualScreenshotBtn : downloadDocCompactBtn;
-    if (!button.getClientRects().length) return;
-    // Measure with the full label so resizing back out restores it. Prioritize
-    // the recording action, whose translated text must never be squeezed out.
-    button.classList.remove("icon-only");
-    button.classList.toggle("icon-only", recordBtn.scrollWidth > recordBtn.clientWidth);
+    for (const button of [elements.manualScreenshotBtn, elements.downloadDocCompactBtn]) {
+      button.classList.add("icon-only");
+    }
   }
 
-  const toolbarObserver = new ResizeObserver(fitToolbarLabels);
-  compactLayout.addEventListener("change", fitToolbarLabels);
-  toolbarObserver.observe(document.querySelector(".header-record-actions"));
-  const labelObserver = new MutationObserver(fitToolbarLabels);
-  for (const button of [elements.manualScreenshotBtn, elements.downloadDocCompactBtn]) {
-    labelObserver.observe(button.querySelector(".btn-label"), {
-      childList: true, characterData: true, subtree: true
-    });
-  }
+  compactLayout.addEventListener("change", updateToolbarLayout);
 
   let layoutTabId = null;
   let layoutWindowId = null;
-  const layoutPort = chrome.runtime.connect({ name: "side-panel-layout" });
+  let layoutPort = null;
+  let layoutReconnectTimer = null;
+  let resumePromise = null;
+  let disposed = false;
+
+  function getLayoutPort() {
+    if (layoutPort) return layoutPort;
+    const port = chrome.runtime.connect({ name: "side-panel-layout" });
+    layoutPort = port;
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      if (layoutPort !== port) return;
+      layoutPort = null;
+      if (!disposed && document.visibilityState === "visible") {
+        clearTimeout(layoutReconnectTimer);
+        layoutReconnectTimer = setTimeout(resumePanelContext, 1000);
+      }
+    });
+    return port;
+  }
+
+  function bindLayoutPort(windowId) {
+    // postMessage can throw before onDisconnect has cleared a stale port.
+    // Retry once with a fresh connection; later failures remain observable.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const port = getLayoutPort();
+      try {
+        port.postMessage({ windowId });
+        return;
+      } catch (error) {
+        if (layoutPort === port) layoutPort = null;
+        try { port.disconnect(); } catch { /* Already disconnected. */ }
+        if (attempt === 1) throw error;
+      }
+    }
+  }
 
   const stepView = window.RecorderStepView.create({
     stepsContainer: document.getElementById("steps-container"),
@@ -74,7 +99,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const panel = window.RecorderPanel.create({
     elements,
     stepView,
-    onStateRendered: fitToolbarLabels,
+    onStateRendered: updateToolbarLayout,
     // A recording attaches to the tab this panel is fitted to, not to whichever
     // tab happens to be active when the button is pressed.
     resolveRootTabId: () => layoutTabId,
@@ -101,13 +126,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (disposed) return;
     if (!tab?.id || !Number.isInteger(tab.windowId) || !/^(https?|file):/i.test(tab.url || "") || tab.url.startsWith(chrome.runtime.getURL(""))) {
       await syncPageLayout(false);
       return;
     }
     layoutTabId = tab.id;
     layoutWindowId = tab.windowId;
-    layoutPort.postMessage({ windowId: tab.windowId });
+    bindLayoutPort(tab.windowId);
     await chrome.runtime.sendMessage({
       action: MESSAGE.setSidePanelLayout,
       open: true,
@@ -122,23 +148,43 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   function resumePanelContext() {
-    if (document.visibilityState !== "visible") return;
-    syncPageLayout(true).then(() => panel.refreshState()).catch(error => console.warn("[Drafts] Panel binding failed:", error));
+    if (disposed || document.visibilityState !== "visible") return Promise.resolve();
+    return refreshPanelContext();
+  }
+
+  function refreshPanelContext() {
+    if (disposed) return Promise.resolve();
+    if (resumePromise) return resumePromise;
+    clearTimeout(layoutReconnectTimer);
+    layoutReconnectTimer = null;
+    resumePromise = (async () => {
+      try {
+        await syncPageLayout(true);
+      } catch (error) {
+        console.warn("[SidePanel] Layout binding failed:", error);
+      }
+      // A layout connection failure must not block the draft/steps refresh.
+      if (!disposed) await panel.refreshState();
+    })().catch(error => console.warn("[SidePanel] State refresh failed:", error))
+      .finally(() => { resumePromise = null; });
+    return resumePromise;
   }
   document.addEventListener("visibilitychange", resumePanelContext);
   window.addEventListener("focus", resumePanelContext);
 
   window.addEventListener("unload", () => {
-    compactLayout.removeEventListener("change", fitToolbarLabels);
-    toolbarObserver.disconnect();
-    labelObserver.disconnect();
+    disposed = true;
+    clearTimeout(layoutReconnectTimer);
+    compactLayout.removeEventListener("change", updateToolbarLayout);
     document.removeEventListener("visibilitychange", resumePanelContext);
     window.removeEventListener("focus", resumePanelContext);
     stepView.dispose();
     syncPageLayout(false);
-    layoutPort.disconnect();
+    const port = layoutPort;
+    layoutPort = null;
+    try { port?.disconnect(); } catch { /* Already disconnected. */ }
   });
 
-  await syncPageLayout(true);
-  panel.refreshState();
+  // Initial rendering must also run when Chrome creates the panel hidden.
+  await refreshPanelContext();
 });

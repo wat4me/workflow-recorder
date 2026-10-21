@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-async function setup(initial = {}) {
+async function setup(initial = {}, options = {}) {
   const data = structuredClone(initial);
   const writes = [];
   const tabs = [1, 2, 3, 4].map(id => ({ id, title: `Page ${id}`, url: `https://page${id}.test/` }));
@@ -21,9 +21,124 @@ async function setup(initial = {}) {
       stops++;
       data.resumableScope = { tabIds: data.recordingTabIds || [], tabsMapping: data.tabsMapping || {} };
       Object.assign(data, { isRecording: false, recordingTabIds: [], tabsMapping: {} });
-    } } });
+    } }, ...options });
   return { data, writes, tabs, drafts, actions, readDraftMediaKeys, stops: () => stops };
 }
+
+function seedRetainedDrafts(count, activeNumber = count) {
+  const data = { activeRecordingDraftId: `draft-${activeNumber}`, actionOrder: ["live-step"],
+    "action:live-step": { id: "live-step", type: "click" }, recordingDraftIndex: [] };
+  for (let number = 1; number <= count; number++) {
+    const id = `draft-${number}`;
+    data.recordingDraftIndex.push({ id, tabIds: [], stepCount: 1, savedCaseId: null, updatedAt: number });
+    if (number !== activeNumber) {
+      data[`recordingDraft:${id}`] = { actions: [{ id: `step-${number}`, screenshotKey: `image-${number}` }], state: {} };
+      data[`recordingDraftMedia:${id}`] = [`image-${number}`];
+    }
+  }
+  return data;
+}
+
+test("retention keeps ten unsaved recordings and discards the oldest content and media references", async () => {
+  const cleaned = [];
+  const initial = seedRetainedDrafts(11);
+  initial.recordingDraftIndex[0].updatedAt = Date.now();
+  const h = await setup(initial, { deleteScreenshots: async keys => cleaned.push(...keys) });
+  assert.equal((await h.drafts.enforceLimit()).discardedCount, 1);
+  assert.equal(h.data.recordingDraftIndex.length, 10);
+  assert.equal(h.data.recordingDraftIndex[0].id, "draft-2");
+  assert.equal(h.data["recordingDraft:draft-1"], undefined);
+  assert.equal(h.data["recordingDraftMedia:draft-1"], undefined);
+  assert.deepEqual(cleaned, ["image-1"]);
+  assert.equal(h.data.activeRecordingDraftId, "draft-11");
+  assert.deepEqual((await h.actions.readActions()).map(action => action.id), ["live-step"]);
+  assert.equal((await h.drafts.enforceLimit()).discardedCount, 0);
+});
+
+test("retention protects the open recording even when it is oldest and recording is active", async () => {
+  const h = await setup({ ...seedRetainedDrafts(12, 1), isRecording: true });
+  assert.equal((await h.drafts.enforceLimit()).discardedCount, 2);
+  assert.equal(h.data.recordingDraftIndex.length, 10);
+  assert.equal(h.data.recordingDraftIndex[0].id, "draft-1");
+  assert.equal(h.data["recordingDraft:draft-2"], undefined);
+  assert.equal(h.data["recordingDraft:draft-3"], undefined);
+  assert.equal(h.data.isRecording, true);
+  assert.equal(h.stops(), 0);
+});
+
+test("empty and saved drafts do not consume retention slots, and shared case media stays safe", async () => {
+  const initial = seedRetainedDrafts(11);
+  initial.caseIndex = [{ id: "saved-case" }];
+  initial["case:saved-case"] = { actions: [{ id: "saved-step", screenshotKey: "image-1" }], pages: [] };
+  initial["caseMedia:saved-case"] = ["image-1"];
+  initial.recordingDraftIndex.unshift({ id: "empty", stepCount: 0 }, { id: "saved", stepCount: 1, savedCaseId: "saved-case" });
+  initial["recordingDraft:saved"] = { actions: [{ id: "saved-step", screenshotKey: "image-1" }], state: { activeCaseId: "saved-case" } };
+  initial["recordingDraftMedia:saved"] = ["image-1"];
+  const deleted = [];
+  const h = await setup(initial, { deleteScreenshots: keys => cleanup.deleteUnreferenced(keys) });
+  const { createMediaCleanupManager } = await import("../background/store/media-cleanup.js");
+  const cleanup = createMediaCleanupManager({ mediaStore: { deleteBlobs: async keys => deleted.push(...keys) } });
+  await h.drafts.enforceLimit();
+  assert.equal((await h.drafts.read()).drafts.filter(draft => draft.hasUnsavedChanges).length, 10);
+  assert.equal(h.data.recordingDraftIndex.length, 12);
+  assert.deepEqual(deleted, [], "a saved case still references the discarded draft's screenshot");
+  assert.deepEqual(h.data["case:saved-case"], initial["case:saved-case"]);
+  assert.ok(h.data["recordingDraft:saved"]);
+});
+
+test("an empty eleventh draft causes no eviction until it gains a recorded step", async () => {
+  const initial = seedRetainedDrafts(11);
+  initial.actionOrder = [];
+  delete initial["action:live-step"];
+  const h = await setup(initial);
+  assert.equal((await h.drafts.enforceLimit()).discardedCount, 0);
+  await h.actions.appendAction({ id: "new-step" });
+  assert.equal((await h.drafts.enforceLimit()).discardedCount, 1);
+  assert.equal(h.data.activeRecordingDraftId, "draft-11");
+  assert.deepEqual((await h.actions.readActions()).map(action => action.id), ["new-step"]);
+});
+
+test("a failed retention commit leaves every draft and its content intact", async () => {
+  const h = await setup(seedRetainedDrafts(11));
+  const before = structuredClone(h.data);
+  const original = chrome.storage.local.set;
+  chrome.storage.local.set = async values => {
+    if (values.pendingRecordingDraftRemovals?.length) throw new Error("storage denied");
+    return original(values);
+  };
+  await assert.rejects(h.drafts.enforceLimit(), /storage denied/);
+  assert.deepEqual(h.data, before);
+});
+
+test("a worker restart finishes an interrupted eviction without touching the current recording", async () => {
+  const h = await setup(seedRetainedDrafts(11));
+  const original = chrome.storage.local.remove;
+  chrome.storage.local.remove = async () => { throw new Error("worker stopped"); };
+  await assert.rejects(h.drafts.enforceLimit(), /worker stopped/);
+  assert.equal(h.data.recordingDraftIndex.length, 10, "the index is committed before content is deleted");
+  assert.ok(h.data["recordingDraft:draft-1"]);
+  chrome.storage.local.remove = original;
+  const cleaned = [];
+  const resumed = await setup(h.data, { deleteScreenshots: async keys => cleaned.push(...keys) });
+  await resumed.drafts.enforceLimit();
+  assert.equal(resumed.data["recordingDraft:draft-1"], undefined);
+  assert.deepEqual(cleaned, ["image-1"]);
+  assert.deepEqual(resumed.data.pendingRecordingDraftRemovals, []);
+  assert.equal(resumed.data.activeRecordingDraftId, "draft-11");
+  assert.deepEqual((await resumed.actions.readActions()).map(action => action.id), ["live-step"]);
+});
+
+test("retention also handles old drafts with no indexed saved-case marker or media list", async () => {
+  const initial = seedRetainedDrafts(11);
+  for (const entry of initial.recordingDraftIndex) delete entry.savedCaseId;
+  delete initial["recordingDraftMedia:draft-1"];
+  const cleaned = [];
+  const h = await setup(initial, { deleteScreenshots: async keys => cleaned.push(...keys) });
+  await h.drafts.enforceLimit();
+  assert.equal(h.data.recordingDraftIndex.length, 10);
+  assert.equal(h.data["recordingDraft:draft-1"], undefined);
+  assert.deepEqual(cleaned, ["image-1"], "legacy snapshot keys are reclaimed too");
+});
 
 test("A/B/C keep separate durable steps, frames, numbering and origin without auto-saving cases", async () => {
   const h = await setup();
@@ -123,6 +238,22 @@ test("recreating the worker restores inactive draft data and invalidates deleted
   assert.equal(resumed.data.workspaceOrigin.deleted, true);
 });
 
+test("continuing an unchanged saved recording is excluded until a step is changed", async () => {
+  const h = await setup({ caseIndex: [{ id: "saved-a" }] });
+  const { originFor } = await import("../background/store/workspace-origin.js");
+  const a = await h.drafts.activate(1);
+  const action = { id: "a", type: "type", value: "saved value" };
+  await h.actions.appendAction(action);
+  h.data.workspaceOrigin = originFor({ id: "saved-a", name: "Saved A" }, [action]);
+  h.data.activeCaseId = null;
+  assert.equal((await h.drafts.read(1)).drafts[0].hasUnsavedChanges, false);
+  await h.drafts.activate(2);
+  assert.equal((await h.drafts.read(2)).drafts.find(item => item.id === a.draftId).hasUnsavedChanges, false);
+  await h.drafts.activate(1);
+  await h.actions.patchAction("a", { value: "changed value" });
+  assert.equal((await h.drafts.read(1)).drafts.find(item => item.id === a.draftId).hasUnsavedChanges, true);
+});
+
 test("inactive draft frames survive reference-aware cleanup but clearing the live draft frees its frames", async () => {
   const h = await setup();
   const a = await h.drafts.activate(1);
@@ -139,4 +270,43 @@ test("inactive draft frames survive reference-aware cleanup but clearing the liv
   await cleanup.deleteUnreferenced(["after-a", "before-a", "after-b"]);
   assert.deepEqual(deleted.sort(), ["after-a", "before-a", "orphan"]);
   assert.equal(h.data.activeRecordingDraftId, a.draftId);
+});
+
+test("recovery counts nonempty unsaved recordings and excludes saved baselines", async () => {
+  const h = await setup({ caseIndex: [{ id: "saved-a" }] });
+  const a = await h.drafts.activate(1);
+  assert.equal((await h.drafts.read(1)).drafts.filter(item => item.hasUnsavedChanges).length, 0);
+  await h.actions.appendAction({ id: "a" });
+  await h.drafts.activate(2);
+  assert.deepEqual((await h.drafts.read(2)).drafts.filter(item => item.hasUnsavedChanges).map(item => item.id), [a.draftId]);
+  await h.actions.appendAction({ id: "b" });
+  assert.equal((await h.drafts.read(2)).drafts.filter(item => item.hasUnsavedChanges).length, 2);
+  await h.drafts.activate(1);
+  h.data.activeCaseId = "saved-a";
+  assert.equal((await h.drafts.read(1)).drafts.find(item => item.id === a.draftId).hasUnsavedChanges, false);
+  await h.drafts.activate(3);
+  assert.equal((await h.drafts.read(3)).drafts.find(item => item.id === a.draftId).hasUnsavedChanges, false);
+  h.data.caseIndex = [];
+  assert.equal((await h.drafts.read(3)).drafts.find(item => item.id === a.draftId).hasUnsavedChanges, true,
+    "deleting the saved case makes the retained steps recoverable again");
+});
+
+test("existing drafts without recovery metadata are classified without rewriting their contents", async () => {
+  const h = await setup({
+    caseIndex: [{ id: "saved-a" }], activeRecordingDraftId: "live",
+    recordingDraftIndex: [
+      { id: "old-saved", tabIds: [1], stepCount: 1 },
+      { id: "old-unsaved", tabIds: [2], stepCount: 2 },
+      { id: "live", tabIds: [3], stepCount: 0 }
+    ],
+    "recordingDraft:old-saved": { actions: [{ id: "saved-step" }], state: { activeCaseId: "saved-a" } },
+    "recordingDraft:old-unsaved": { actions: [{ id: "first" }, { id: "second" }], state: {} }
+  });
+  const before = structuredClone(h.data);
+  const state = await h.drafts.read(3);
+  assert.deepEqual(state.drafts.filter(item => item.hasUnsavedChanges).map(item => item.id), ["old-unsaved"]);
+  assert.deepEqual(h.data, before, "reading legacy summaries preserves the saved snapshots");
+  await h.drafts.activate(3, "old-unsaved");
+  assert.deepEqual((await h.actions.readActions()).map(action => action.id), ["first", "second"]);
+  assert.equal(h.data.caseIndex.length, 1, "recovery does not create saved cases");
 });

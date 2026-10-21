@@ -92,3 +92,84 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-co
 .confirm-content .prompt-validation-error { color: var(--danger-color); margin: 4px 0 0; }
 
 .name-length-counter { display: block; margin-top: 3px; color: var(--text-muted); font-size: 11px; text-align: right; }
+
+/* Recording tools use icons; save and copy retain visible action labels.
+   Button titles provide hover descriptions. */
+.app-container .recorder-icon-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.app-container .recorder-header { grid-template-columns: auto minmax(0, 1fr) auto; }
+.app-container .header-record-actions { width: auto; }
+.app-container .header-record-actions .btn {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  gap: 0;
+}
+.app-container .header-utilities .icon-btn,
+.app-container .recording-recovery-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.app-container .header-record-actions .stopping-state {
+  flex-basis: auto;
+  width: auto;
+  gap: 6px;
+  padding-inline: 8px;
+  opacity: 1;
+}
+.app-container .stopping-state .recorder-icon-label {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip-path: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .stopping-state .btn-icon { animation: recovery-spin 1s linear infinite; }
+}
+.app-container .case-action-buttons > .btn,
+.app-container .copy-task-control { flex: 1; min-width: 0; }
+.app-container .case-action-buttons .btn {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  gap: 6px;
+  white-space: nowrap;
+}
+.app-container .copy-task-control > .btn { flex: 1; min-width: 0; }
+.app-container .copy-task-control { align-items: center; gap: 5px; }
+.app-container .copy-task-tooltip {
+  position: relative;
+  inset: auto;
+  transform: none;
+  color: var(--text-muted);
+}
+.app-container .copy-task-tooltip .tooltip-content { right: 0; left: auto; }
+.app-container .copy-task-tooltip .tooltip-content::after { right: 4px; left: auto; }
+.app-container .step-batch-actions :is(.step-batch-delete, .step-select-all) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+}
+.app-container .step-batch-actions .step-clear-btn { min-height: 30px; white-space: nowrap; }
+.app-container .steps-section-head:not(.is-selecting) .step-batch-delete { display: none; }
+.app-container .steps-section-head.is-empty .step-select-all { display: none; }
+.app-container .recover-recordings-btn > svg { display: block; }

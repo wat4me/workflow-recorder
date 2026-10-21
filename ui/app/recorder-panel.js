@@ -1,4 +1,6 @@
 /** Side-panel recorder and current-workspace actions. */
+import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
+
 (function () {
   function create(options) {
     const {
@@ -29,6 +31,7 @@
 
     let isRecording = false;
     let recordingRequestPending = false;
+    let stopRequestPending = false;
     let copyRequestPending = false;
     let screenshotsEnabled = true;
     // The case name is asked for when it is needed instead of living in a field
@@ -45,8 +48,71 @@
     let refreshPromise = null;
     let refreshVersion = 0;
     let lastStorageUpdateAt = 0;
-    const draftSelect = elements.draftSelect;
-    const draftStatus = elements.draftStatus;
+    let recoveringDraftId = null;
+    let dismissRecoveryError = null;
+    const { recoverRecordingsBtn, closeRecoveryBtn, recoveryPanel, recoveryList } = elements;
+
+    function closeRecovery(returnFocus = false) {
+      if (recoveryPanel) recoveryPanel.hidden = true;
+      recoverRecordingsBtn?.setAttribute("aria-expanded", "false");
+      if (returnFocus) recoverRecordingsBtn?.focus();
+    }
+
+    function updateRecoveryProgress() {
+      recoveryPanel.setAttribute("aria-busy", String(!!recoveringDraftId));
+      for (const button of recoveryList.querySelectorAll(".recording-recovery-item")) {
+        const recovering = button.dataset.draftId === recoveringDraftId;
+        button.disabled = recordingRequestPending;
+        button.classList.toggle("is-recovering", recovering);
+        button.querySelector(".recording-recovery-action").textContent = recovering
+          ? t("recoveringRecording", [], "恢复中…") : t("recoverRecordingAction", [], "恢复");
+      }
+    }
+
+    function renderRecovery(stored, actions) {
+      if (!recoverRecordingsBtn || !recoveryPanel || !recoveryList) return;
+      // Keep the clicked row in place while storage notifications refresh the
+      // panel. Rebuilding it here would erase the user's in-progress feedback.
+      recoverRecordingsBtn.disabled = recordingRequestPending && !recoveringDraftId;
+      if (recoveringDraftId) {
+        updateRecoveryProgress();
+        return;
+      }
+      const available = (stored.drafts || []).map(draft => draft.id === stored.draftId
+        ? { ...draft, stepCount: actions.length,
+          hasUnsavedChanges: actions.length > 0 && !savedCaseIdFor(stored, actions) } : draft)
+        .filter(draft => draft.stepCount > 0 && draft.hasUnsavedChanges);
+      recoverRecordingsBtn.hidden = available.length < 2;
+      if (available.length < 2) closeRecovery();
+      const candidates = available.filter(draft => draft.id !== stored.draftId);
+      const signature = JSON.stringify(candidates.map(draft => [draft.id, draft.title, draft.url, draft.stepCount]));
+      if (recoveryList.dataset.signature === signature) {
+        updateRecoveryProgress();
+        return;
+      }
+      recoveryList.dataset.signature = signature;
+      recoveryList.replaceChildren(...candidates.map(draft => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "recording-recovery-item";
+        button.dataset.draftId = draft.id;
+        button.disabled = recordingRequestPending;
+        const name = document.createElement("strong");
+        name.textContent = draft.title || draft.url || t("unnamedRecording", [], "未命名录制");
+        name.title = name.textContent;
+        const count = document.createElement("span");
+        count.className = "recording-recovery-count";
+        count.textContent = t("recoveryStepCount", [draft.stepCount], `${draft.stepCount} 个步骤`);
+        const url = document.createElement("small");
+        url.textContent = draft.url || "";
+        url.title = url.textContent;
+        const action = document.createElement("span");
+        action.className = "recording-recovery-action";
+        button.append(name, count, url, action);
+        return button;
+      }));
+      updateRecoveryProgress();
+    }
     async function sendRuntimeMessage(message, timeoutMs) {
       return sendMessage({
         ...(renderedStored?.draftId ? { workspaceDraftId: renderedStored.draftId } : {}),
@@ -84,9 +150,13 @@
     function flashSaved() {
       saveCurrentCaseBtn.classList.add("success");
       saveCurrentCaseBtn.querySelector(".btn-label").textContent = t("saved", [], "已保存");
+      saveCurrentCaseBtn.setAttribute("aria-label", t("saved", [], "已保存"));
+      saveCurrentCaseBtn.title = t("saved", [], "已保存");
       setTimeout(() => {
         saveCurrentCaseBtn.classList.remove("success");
         saveCurrentCaseBtn.querySelector(".btn-label").textContent = t("saveCaseAction", [], "保存用例");
+        saveCurrentCaseBtn.title = t("saveCaseAction", [], "保存用例");
+        saveCurrentCaseBtn.setAttribute("aria-label", saveCurrentCaseBtn.title);
       }, 1400);
     }
 
@@ -108,7 +178,7 @@
       if (!manualScreenshotBtn) return;
       // A recording that is not saving screenshots has nothing for a manual
       // capture to do, so the action is not offered at all.
-      manualScreenshotBtn.hidden = !isRecording || !screenshotsEnabled;
+      manualScreenshotBtn.hidden = stopRequestPending || !isRecording || !screenshotsEnabled;
       manualScreenshotBtn.disabled = recordingRequestPending
         || !isRecording
         || !screenshotsEnabled
@@ -137,7 +207,7 @@
           version = refreshVersion;
           const tabId = await resolveRootTabId();
           const [stored, workspace] = await Promise.all([
-            chrome.storage.local.get(["isRecording", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, STEP_DISPLAY_SETTINGS_KEY]),
+            chrome.storage.local.get(["isRecording", "activeCaseId", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, STEP_DISPLAY_SETTINGS_KEY]),
             Number.isInteger(tabId) ? sendMessage({ action: MESSAGE.getDraftState, tabId }) : readActions().then(actions => ({ actions }))
           ]);
           if (workspace.success === false) throw new Error(workspace.error || "草稿读取失败");
@@ -151,26 +221,7 @@
     function renderState(stored, actions, changedIds = null) {
       renderedStored = stored;
       stepView.setWorkspaceContext?.({ workspaceDraftId: stored.draftId || null });
-      if (draftSelect) {
-        draftSelect.closest(".draft-toolbar").hidden = !stored.draftId;
-        const signature = JSON.stringify([stored.draftId, stored.drafts?.map(draft => [draft.id, draft.title])]);
-        if (draftSelect.dataset.signature !== signature) {
-          draftSelect.replaceChildren(...(stored.drafts || []).map(draft => {
-            const option = document.createElement("option");
-            option.value = draft.id;
-            option.textContent = draft.title || draft.url || t("unnamedCase", [], "未命名用例");
-            return option;
-          }));
-          draftSelect.value = stored.draftId || "";
-          draftSelect.dataset.signature = signature;
-        }
-        draftSelect.disabled = recordingRequestPending;
-      }
-      if (draftStatus) {
-        draftStatus.textContent = stored.draftActive === false
-          ? t("draftInactive", [], "已暂停 · 点击继续录制可返回此草稿")
-          : t("draftAutoSaved", [], "草稿自动保留 · 切换页面互不混入");
-      }
+      renderRecovery(stored, actions);
       // Names belong to a workspace, not the lifetime of this side-panel page.
       // The origin survives edits; root recordings are identified by their first step.
       const origin = stored.workspaceOrigin;
@@ -208,14 +259,31 @@
     }
 
     function setRecordButtonState(recording, canContinue = false) {
+      const labelKey = stopRequestPending ? "stoppingRecording"
+        : recording ? "stopRecording" : canContinue ? "continueRecording" : "startRecording";
+      const label = t(labelKey);
+      recordBtn.title = label;
+      recordBtn.setAttribute("aria-label", label);
+      recordBtn.dataset.i18nTitle = labelKey;
+      recordBtn.dataset.i18nAriaLabel = labelKey;
+      recordBtnLabel.dataset.i18n = labelKey;
+      recordBtnLabel.textContent = label;
       const recordBtnIcon = recordBtn.querySelector(".btn-icon");
+      if (stopRequestPending) {
+        recordBtn.className = "btn btn-primary stopping-state";
+        recordBtn.dataset.recordingMode = "";
+        if (recordBtnIcon) recordBtnIcon.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" opacity=".25"></circle><path d="M12 3a9 9 0 0 1 9 9"></path>
+          </svg>`;
+        return;
+      }
       if (recording) {
         recordBtn.className = "btn btn-primary recording-state";
         recordBtn.dataset.recordingMode = "";
-        recordBtnLabel.textContent = t("stopRecording", [], "停止录制");
         if (recordBtnIcon) {
           recordBtnIcon.innerHTML = `
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <circle cx="12" cy="12" r="10"></circle>
               <rect x="8.5" y="8.5" width="7" height="7" rx="1.5" fill="currentColor"></rect>
             </svg>
@@ -226,9 +294,6 @@
 
       recordBtn.className = "btn btn-primary start-state";
       recordBtn.dataset.recordingMode = canContinue ? "continue" : "restart";
-      recordBtnLabel.textContent = canContinue
-        ? t("continueRecording", [], "继续录制")
-        : t("startRecording", [], "开始录制");
       if (recordBtnIcon) {
         recordBtnIcon.innerHTML = `
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -268,24 +333,68 @@
     async function stopRecording() {
       if (recordingRequestPending) return;
       recordingRequestPending = true;
+      stopRequestPending = true;
       recordBtn.disabled = true;
-      setRecordButtonState(false);
-      const response = await sendRuntimeMessage({ action: MESSAGE.toggleRecording, start: false }, 30000);
+      setRecordButtonState(isRecording);
+      updateManualScreenshotAction(renderedCaptureState);
+      let response;
+      try {
+        response = await sendRuntimeMessage({ action: MESSAGE.toggleRecording, start: false }, 30000);
+      } finally {
+        stopRequestPending = false;
+        recordingRequestPending = false;
+        recordBtn.disabled = false;
+        setRecordButtonState(isRecording, !isRecording && renderedActions.length > 0);
+      }
       isRecording = !response?.success;
       if (!response?.success) {
         reportError(response?.error || t("stopRecordingFailed", [], "停止当前录制失败"));
       }
-      recordingRequestPending = false;
       refreshState();
     }
 
     function bindEvents() {
-      draftSelect?.addEventListener("change", async () => {
-        const draftId = draftSelect.value;
-        draftSelect.disabled = true;
-        const response = await sendMessage({ action: MESSAGE.selectDraft, draftId, tabId: await resolveRootTabId() }, 30000);
-        if (!response?.success) reportError(response?.error || "草稿切换失败");
-        await refreshState();
+      closeRecoveryBtn?.addEventListener("click", () => closeRecovery(true));
+      recoverRecordingsBtn?.addEventListener("click", () => {
+        recoveryPanel.hidden = !recoveryPanel.hidden;
+        recoverRecordingsBtn.setAttribute("aria-expanded", String(!recoveryPanel.hidden));
+        if (!recoveryPanel.hidden) recoveryList.querySelector("button")?.focus();
+      });
+      recoveryList?.addEventListener("click", async event => {
+        const button = event.target.closest("button[data-draft-id]");
+        if (!button || !recoveryList.contains(button) || recordingRequestPending) return;
+        const draftId = button.dataset.draftId;
+        const recordingName = button.querySelector("strong").textContent;
+        dismissRecoveryError?.();
+        dismissRecoveryError = null;
+        let recovered = false;
+        recordingRequestPending = true;
+        recoveringDraftId = draftId;
+        recordBtn.disabled = true;
+        renderRecovery(renderedStored, renderedActions);
+        try {
+          const response = await sendMessage({ action: MESSAGE.selectDraft, draftId, tabId: await resolveRootTabId() }, 30000);
+          if (!response?.success) throw new Error(response?.error || t("recoverRecordingFailed", [], "恢复录制失败"));
+          recovered = true;
+        } catch (error) {
+          dismissRecoveryError = reportError(error.message);
+        } finally {
+          recordingRequestPending = false;
+          recoveringDraftId = null;
+          recordBtn.disabled = false;
+          renderRecovery(renderedStored, renderedActions);
+          try {
+            await refreshState();
+            if (recovered) {
+              closeRecovery();
+              notify(t("recordingRecovered", [recordingName, renderedActions.length],
+                `已恢复「${recordingName}」（${renderedActions.length} 个步骤），点击“继续录制”即可接着录。`));
+              recordBtn.focus();
+            }
+          } catch (error) {
+            dismissRecoveryError = reportError(error.message);
+          }
+        }
       });
       captureSettingsBtn?.addEventListener("click", async () => {
         // Offered next to the recording controls rather than inside the more-actions
@@ -529,11 +638,16 @@
       });
 
       document.addEventListener("click", event => {
+        if (recoveryPanel && !recoveryPanel.hidden && !recoveryPanel.contains(event.target)
+            && !recoverRecordingsBtn.contains(event.target)) closeRecovery();
         if (!moreActionsMenu || moreActionsMenu.hidden) return;
         if (!moreActionsBtn.parentElement.contains(event.target)) closeMoreActions();
       });
       document.addEventListener("keydown", event => {
-        if (event.key === "Escape") closeMoreActions();
+        if (event.key === "Escape") {
+          closeMoreActions();
+          if (recoveryPanel && !recoveryPanel.hidden) closeRecovery(true);
+        }
       });
 
       // The worker announces changes, and storage events cover a notification
@@ -543,7 +657,7 @@
       });
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== "local") return;
-        if (changes.activeRecordingDraftId || changes.recordingDraftIndex ||
+        if (changes.activeRecordingDraftId || changes.recordingDraftIndex || changes.caseIndex ||
             (renderedStored?.draftId && renderedStored.draftActive === false &&
               Object.keys(changes).some(key => key.startsWith("recordingDraft:")))) {
           refreshState();
@@ -554,11 +668,11 @@
           refreshState();
           return;
         }
-        const stateKeys = ["isRecording", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY];
+        const stateKeys = ["isRecording", "activeCaseId", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY];
         const changedRecords = Object.keys(changes).filter(key => key.startsWith("action:"));
         // actionOrder changes on append and delete; an `action:` key changes
         // when a screenshot binds to an existing step.
-        const touchedActions = changes.actionOrder || changes.isRecording || changes.workspaceOrigin ||
+        const touchedActions = changes.actionOrder || changes.isRecording || changes.activeCaseId || changes.workspaceOrigin ||
           Object.keys(changes).some(key => key.startsWith("action:"));
         if (touchedActions) {
           lastStorageUpdateAt = Date.now();

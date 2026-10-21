@@ -1,5 +1,14 @@
 # Release
 
+## 1.3.1
+
+- Keep unsaved recordings in the background, show recovery only when multiple recordings are available, and retain up to 10 unsaved recordings.
+- Improve recovery feedback and closing controls, and reconnect recording panels after back/forward cache transitions.
+- Filter clicks without meaningful page effects and ignore unchanged input fields and empty editor fillers while preserving real clears and autofill.
+- Let ready pages capture independently, reuse settled frames, and release the debugger before queued screenshot saves finish.
+- Use compact icon controls with hover labels while retaining text for saving cases, copying for AI and clearing steps.
+- Keep temporary recording diagnostics disabled in shared builds, including the export and clear controls.
+
 ## 1.3.0
 
 - Capture browser-computed local accessibility context separately from DOM evidence and include both in AI copy and exported steps, including when screenshots are off.

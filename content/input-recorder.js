@@ -5,14 +5,23 @@
   function create({ recordAction }) {
     const { getEditableTarget, getEditableValue } = globalThis.RecorderTargeting;
     const activeTimers = new Map();
-    let lastRecordedValues = new WeakMap();
+    let lastKnownValues = new WeakMap();
     let userTouchedInputs = new WeakSet();
     const committedTimers = new Set();
     let lastUserTouchedInput = null;
 
-    function markUserTouched(element) {
+    function inputValue(editable) {
+      const value = getEditableValue(editable);
+      // Editors use zero-width fillers to keep an empty paragraph editable.
+      // Normalize only filler-only values, never characters inside real text
+      // (including joiners in emoji/languages) or deliberate ordinary spaces.
+      return /[\u200B\uFEFF]/.test(value) && !value.replace(/[\u200B\uFEFF]/g, "").trim() ? "" : value;
+    }
+
+    function markUserTouched(element, beforeChange = true) {
       const editable = getEditableTarget(element);
       if (!editable) return;
+      if (beforeChange && !lastKnownValues.has(editable)) lastKnownValues.set(editable, inputValue(editable));
       userTouchedInputs.add(editable);
       lastUserTouchedInput = editable;
     }
@@ -30,9 +39,11 @@
     function recordValue(target) {
       const editable = getEditableTarget(target);
       if (!editable || !userTouchedInputs.has(editable)) return;
-      const value = getEditableValue(editable);
-      if (lastRecordedValues.get(editable) === value) return;
-      lastRecordedValues.set(editable, value);
+      const value = inputValue(editable);
+      const previous = lastKnownValues.get(editable);
+      if (previous === value) return;
+      lastKnownValues.set(editable, value);
+      if (previous === undefined && value === "") return;
       if (!window.SemanticElementAnalyzer) return;
       recordAction({
         type: "type",
@@ -77,19 +88,27 @@
       for (const timer of committedTimers) clearTimeout(timer);
       activeTimers.clear();
       committedTimers.clear();
-      lastRecordedValues = new WeakMap();
+      lastKnownValues = new WeakMap();
       userTouchedInputs = new WeakSet();
       lastUserTouchedInput = null;
     }
 
     function handleBeforeInput(event) {
-      markUserTouched(event.target);
+      if (event.isTrusted) markUserTouched(event.target);
+    }
+
+    function handleFocus(event) {
+      const target = getEditableTarget(event.target);
+      // Focus captures the old value without treating script-driven focus as
+      // user input. Do not overwrite a value still awaiting its typing commit.
+      if (target && !activeTimers.has(target)) lastKnownValues.set(target, inputValue(target));
     }
 
     function handleInput(event) {
+      if (!event.isTrusted) return;
       const target = getEditableTarget(event.target);
       if (!target) return;
-      if (event.isTrusted) markUserTouched(target);
+      markUserTouched(target, false);
       if (!userTouchedInputs.has(target)) return;
       if (activeTimers.has(target)) clearTimeout(activeTimers.get(target));
       activeTimers.set(target, setTimeout(() => {
@@ -118,7 +137,8 @@
         return;
       }
       if (tagName === "INPUT" || tagName === "TEXTAREA") {
-        if (event.isTrusted) markUserTouched(target);
+        if (!event.isTrusted) return;
+        markUserTouched(target, false);
         flushTarget(target);
       }
     }
@@ -127,6 +147,7 @@
       flush,
       reset,
       handleBeforeInput,
+      handleFocus,
       handleBlur,
       handleChange,
       handleInput,

@@ -16,19 +16,143 @@ const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
 
 /** Screenshot scheduling backed exclusively by pushed CDP screencast frames. */
 
-// Lets the page finish reacting to the action before we look at it.
-const SETTLE_DELAY_MS = 80;
 // Background tabs can suspend the animation frames needed to answer the primer.
 const PRIME_TIMEOUT_MS = 400;
 // How long to wait for a screencast frame when the cache is still empty.
 const FRAME_TIMEOUT_MS = 800;
+const STOP_WAIT = Symbol("stop-capture-wait");
 
 // While a session is being torn down (see `flush`), every millisecond the pump
 // spends waiting is a millisecond Chrome keeps its "started debugging this
 // browser" infobar on screen after the user already stopped recording. The
 // finishing path therefore never waits: it uses the frame it already has.
 
-export function createScreenshotManager({ t, queueAction, screencast, mediaStore, deleteScreenshots, notifyStepsUpdated }) {
+export function createScreenshotManager(dependencies) {
+  const lanes = new Map();
+  const claimedActionIds = new Set();
+  let stateWriteTail = Promise.resolve();
+  let lastStateUpdatedAt = Date.now();
+  let finishing = false;
+  let stopRequested = false;
+  let framesFrozen = false;
+  let manualRequestPending = false;
+  let captureCount = 0;
+  const captureWaiters = [];
+
+  // Stability checks are independent per tab. Limit frame acquisition/storage
+  // to two jobs so many recorded tabs cannot flood decoding and IndexedDB.
+  function acquireCapture() {
+    return new Promise(resolve => {
+      const grant = () => {
+        captureCount++;
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          captureCount--;
+          captureWaiters.shift()?.();
+        });
+      };
+      if (captureCount < 2) grant();
+      else captureWaiters.push(grant);
+    });
+  }
+
+  function getState() {
+    const states = [...lanes.values()].map(lane => lane.getState());
+    const activeCaptures = states.filter(state => state.busy)
+      .map(state => ({ actionId: state.activeActionId, kind: state.kind }));
+    const first = activeCaptures[0];
+    return {
+      busy: activeCaptures.length > 0,
+      kind: first?.kind || null,
+      activeActionId: first?.actionId || states.find(state => state.activeActionId)?.activeActionId || null,
+      activeCaptures,
+      pendingCount: states.reduce((count, state) => count + state.pendingCount, 0)
+    };
+  }
+
+  function publishState() {
+    if (finishing) return Promise.resolve();
+    lastStateUpdatedAt = Math.max(Date.now(), lastStateUpdatedAt + 1);
+    const state = { ...getState(), updatedAt: lastStateUpdatedAt };
+    // Progress never blocks capture, but writes stay ordered so a delayed
+    // pending snapshot cannot overwrite the final idle state.
+    const write = stateWriteTail.then(() => chrome.storage.local.set({ screenshotCaptureState: state }));
+    stateWriteTail = write.catch(error => {
+      console.warn("[Screenshots] Failed to publish capture state:", error.message);
+    });
+    return stateWriteTail;
+  }
+
+  const options = { ...dependencies, claimedActionIds, acquireCapture, publishState };
+  // These helpers do not enqueue work. They share claimed ids with every lane
+  // so startup recovery cannot fail a job already scheduled by this worker.
+  const services = createTabScreenshotManager(options);
+  function laneFor(tabId) {
+    if (!lanes.has(tabId)) {
+      const lane = createTabScreenshotManager(options);
+      lanes.set(tabId, lane);
+      if (stopRequested) lane.beginStopping();
+      if (framesFrozen) lane.freezeFrames();
+    }
+    return lanes.get(tabId);
+  }
+
+  return {
+    beforeKeyFor: services.beforeKeyFor,
+    snapshotFrameData: services.snapshotFrameData,
+    storeFrameBlob: services.storeFrameBlob,
+    recoverInterruptedJobs: services.recoverInterruptedJobs,
+    getState,
+    beginStopping() {
+      stopRequested = true;
+      finishing = true;
+      for (const lane of lanes.values()) lane.beginStopping();
+    },
+    freezeFrames() {
+      framesFrozen = true;
+      for (const lane of lanes.values()) lane.freezeFrames();
+    },
+    schedule(actionId, tab, actionType, activityAt) {
+      if (!actionId || !tab?.id || !tab.windowId) return;
+      laneFor(tab.id).schedule(actionId, tab, actionType, activityAt);
+    },
+    async handleManual(target) {
+      if (getState().busy) return { success: false, busy: true,
+        error: dependencies.t("errorScreenshotBusy", [], "插件正在截图") };
+      if (manualRequestPending) return { success: false,
+        error: dependencies.t("errorManualScreenshotPending", [], "手动截图请求处理中") };
+      manualRequestPending = true;
+      try {
+        const tabId = Number.isInteger(target) ? target : target?.id;
+        return await laneFor(tabId).handleManual(target);
+      } finally {
+        manualRequestPending = false;
+      }
+    },
+    markContextClosed(tabId, windowId) {
+      for (const lane of lanes.values()) lane.markContextClosed(tabId, windowId);
+    },
+    async flush() {
+      finishing = true;
+      try {
+        do {
+          await Promise.all([...lanes.values()].map(lane => lane.flush()));
+        } while (getState().pendingCount > 0);
+      } finally {
+        if (!manualRequestPending && getState().pendingCount === 0) lanes.clear();
+        stopRequested = false;
+        framesFrozen = false;
+        finishing = false;
+        await publishState();
+      }
+    }
+  };
+}
+
+function createTabScreenshotManager({ t, queueAction, screencast, mediaStore, deleteScreenshots, notifyStepsUpdated,
+  claimedActionIds, acquireCapture, publishState }) {
   let queue = [];
   let pumpPromise = null;
   let busy = false;
@@ -36,12 +160,31 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
   let activeJob = null;
   let manualRequestPending = false;
   let finishing = false;
-  let stateWriteTail = Promise.resolve();
-  let lastStateUpdatedAt = Date.now();
-  // Steps this worker has taken responsibility for. Startup recovery uses it to
-  // tell a step stranded by a previous worker from one this worker just queued,
-  // which it cannot do from storage alone: both are simply `pending` there.
-  const claimedActionIds = new Set();
+  let framesFrozen = false;
+  let releaseStopWait;
+  let stopWait = new Promise(resolve => { releaseStopWait = resolve; });
+
+  function beginStopping() {
+    finishing = true;
+    releaseStopWait(STOP_WAIT);
+    if (activeJob && !activeJob.manual) {
+      chrome.tabs.sendMessage(activeJob.tabId, { action: MESSAGE.cancelPageStableWait }, { frameId: 0 }).catch(() => {});
+    }
+  }
+
+  function freezeJob(job) {
+    if (!job || job.cancelled) return;
+    job.frameData ||= screencast.getLatestFrame(job.tabId);
+    job.frameFrozen = true;
+  }
+
+  // Synchronous: every job owns its frame before the debugger cache is cleared.
+  // Persistence remains awaited by flush, after detach, within the stop request.
+  function freezeFrames() {
+    framesFrozen = true;
+    freezeJob(activeJob);
+    for (const job of queue) freezeJob(job);
+  }
 
   function getState() {
     return {
@@ -65,21 +208,10 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
    * these storage writes would only delay debugger detach.
    * `flush` publishes the final state itself.
    */
-  async function broadcastState(nextBusy, nextKind = null) {
+  function broadcastState(nextBusy, nextKind = null) {
     busy = nextBusy;
     kind = nextBusy ? nextKind : null;
-    if (finishing) return;
-
-    lastStateUpdatedAt = Math.max(Date.now(), lastStateUpdatedAt + 1);
-    const state = { ...getState(), updatedAt: lastStateUpdatedAt };
-    // Enqueue broadcasts are intentionally fire-and-forget in several hot paths.
-    // Serialize the actual storage writes so an older "pending" snapshot cannot
-    // finish after the final idle snapshot and leave the side panel disabled.
-    const write = stateWriteTail.then(() => chrome.storage.local.set({ screenshotCaptureState: state }));
-    stateWriteTail = write.catch(error => {
-      console.warn("[Screenshots] Failed to publish capture state:", error.message);
-    });
-    await write;
+    return finishing ? Promise.resolve() : publishState();
   }
 
   function ensurePump() {
@@ -93,14 +225,15 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
   }
 
   function interruptWaitingAutomatic() {
-    if (!activeJob || activeJob.manual || busy) return null;
+    if (!activeJob || activeJob.manual || activeJob.acquiringCapture || busy) return null;
     activeJob.cancelled = true;
     chrome.tabs.sendMessage(activeJob.tabId, { action: MESSAGE.cancelPageStableWait }, { frameId: 0 }).catch(() => {});
     return { ...activeJob, cancelled: false };
   }
 
   function enqueue(job) {
-    if (activeJob?.actionId === job.actionId && !activeJob.manual && !busy) {
+    if (framesFrozen) freezeJob(job);
+    if (activeJob?.actionId === job.actionId && !activeJob.manual && !activeJob.acquiringCapture && !busy) {
       activeJob.cancelled = true;
       queue = queue.filter(item => item.actionId !== job.actionId);
       queue.push(job);
@@ -114,7 +247,7 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
     broadcastState(busy, kind).catch(() => {});
   }
 
-  function schedule(actionId, senderTab, actionType = "") {
+  function schedule(actionId, senderTab, actionType = "", activityAt = 0) {
     if (!actionId || !senderTab?.id || !senderTab.windowId) return;
     // The `pending` marker itself was written with the step; see action-log.js.
     claimedActionIds.add(actionId);
@@ -124,6 +257,7 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
       tabId: senderTab.id,
       windowId: senderTab.windowId,
       requestedAt: Date.now(),
+      activityAt: Math.min(Number(activityAt) || 0, Date.now()),
       stabilityAttempts: 0
     });
     ensurePump();
@@ -139,7 +273,7 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
     if (!senderTab?.id || !senderTab.windowId) {
       return { success: false, error: t("errorNoCurrentPage", [], "未找到当前网页") };
     }
-    if (busy) return { success: false, busy: true, error: t("errorScreenshotBusy", [], "插件正在截图") };
+    if (busy || activeJob?.acquiringCapture) return { success: false, busy: true, error: t("errorScreenshotBusy", [], "插件正在截图") };
     if (manualRequestPending) {
       return { success: false, error: t("errorManualScreenshotPending", [], "手动截图请求处理中") };
     }
@@ -204,7 +338,7 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
     });
     if (!matches(activeJob) || activeJob.originClosed) return;
     activeJob.originClosed = true;
-    if (!activeJob.manual && !busy) {
+    if (!activeJob.manual && !activeJob.acquiringCapture && !busy) {
       activeJob.cancelled = true;
       queue.unshift({ ...activeJob, cancelled: false, originClosed: true, skipStability: true });
       chrome.tabs.sendMessage(activeJob.tabId, { action: MESSAGE.cancelPageStableWait }, { frameId: 0 }).catch(() => {});
@@ -220,11 +354,16 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
     while (queue.length > 0) {
       const job = queue.shift();
       activeJob = job;
-      await broadcastState(busy, kind);
-      if (!job.manual && !finishing) await new Promise(resolve => setTimeout(resolve, SETTLE_DELAY_MS));
+      const startedAt = Date.now();
+      let stabilityMs = 0;
+      let slotMs = 0;
+      let frameMs = 0;
+      let persistMs = 0;
+      let lastChangeAt = 0;
+      broadcastState(busy, kind).catch(() => {});
       if (job.cancelled) {
         activeJob = null;
-        await broadcastState(busy, kind);
+        broadcastState(busy, kind).catch(() => {});
         continue;
       }
 
@@ -237,20 +376,22 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
           const hasBacklog = queue.length > 0;
           const isNavigation = job.actionType === "navigate" || job.actionType === "newPage";
           const isInput = job.actionType === "type";
-          const stability = await chrome.tabs.sendMessage(
+          const options = hasBacklog
+            ? { timeoutMs: 700, quietMs: 180 }
+            : isNavigation
+              ? { timeoutMs: 2500, quietMs: 280 }
+              : isInput
+                ? { timeoutMs: 900, quietMs: 220 }
+                : { timeoutMs: 1500, quietMs: 280 };
+          const stability = await Promise.race([chrome.tabs.sendMessage(
             job.tabId,
             {
               action: MESSAGE.waitForPageStable,
-              options: hasBacklog
-                ? { timeoutMs: 700, quietMs: 180 }
-                : isNavigation
-                  ? { timeoutMs: 2500, quietMs: 280 }
-                  : isInput
-                    ? { timeoutMs: 900, quietMs: 220 }
-                    : { timeoutMs: 1500, quietMs: 280 }
+              options: { ...options, activityAt: job.activityAt }
             },
             { frameId: 0 }
-          );
+          ), stopWait]);
+          lastChangeAt = Number(stability?.lastChangeAt) || 0;
           if (
             !stability?.stable &&
             stability?.loadingIndicatorVisible &&
@@ -262,33 +403,49 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
           }
         } catch (error) {
           console.warn("[Screenshots] Page stability check unavailable:", error.message);
+        } finally {
+          stabilityMs = Date.now() - startedAt;
         }
       }
       if (job.cancelled) continue;
 
       try {
-        if (!screencast.has(job.tabId)) {
+        if (!job.frameFrozen && !screencast.has(job.tabId)) {
           throw new Error(t("errorNoCapturePage", [], "没有可用于截图的录制页面"));
         }
 
-        await broadcastState(true, job.manual ? "manual" : "auto");
+        // Pin a settled cached frame before waiting for a storage slot: another
+        // tab's slow write must not make this step capture a later user action.
+        const cachedFrame = job.frameFrozen ? job.frameData : screencast.getLatestFrame(job.tabId);
+        if (cachedFrame && !job.manual && (finishing || !lastChangeAt || cachedFrame.at >= lastChangeAt)) {
+          job.frameData ||= cachedFrame;
+        }
+        const slotStartedAt = Date.now();
+        job.acquiringCapture = true;
+        const releaseCapture = await acquireCapture();
+        slotMs = Date.now() - slotStartedAt;
+        broadcastState(true, job.manual ? "manual" : "auto").catch(() => {});
         let frame;
         try {
-          if (finishing) {
+          const frameStartedAt = Date.now();
+          if (job.frameFrozen || finishing) {
             // And never block while finishing. A screencast only pushes on paint,
             // so a tab with no cached frame is backgrounded or was never painted
             // and will not produce one just because we wait on it -- that wait
             // would be spent holding the debugging infobar up, per pending step.
-            frame = screencast.getLatestFrame(job.tabId);
+            frame = job.frameFrozen ? job.frameData : job.frameData || cachedFrame || screencast.getLatestFrame(job.tabId);
             if (!frame) throw new Error(t("errorNoCapturePage", [], "没有可用于截图的录制页面"));
           } else {
-            let afterAt = 0;
+            let afterAt = lastChangeAt;
             // A screencast only pushes on paint, so a settled page emits nothing
             // and there may be no frame at all to read. Ask the page for one
             // deliberate repaint instead of waiting out the timeout and losing the
             // step's screenshot. Manual capture always primes a fresh frame because
             // it means "what the page looks like now", not the latest cached paint.
-            if (job.manual || !screencast.getLatestFrame(job.tabId)) {
+            const isFresh = candidate => candidate && (!lastChangeAt || candidate.at >= lastChangeAt);
+            const candidate = isFresh(cachedFrame) ? cachedFrame : screencast.getLatestFrame(job.tabId);
+            const needsFreshFrame = job.manual || !isFresh(candidate);
+            if (needsFreshFrame) {
               afterAt = Date.now();
               let timer;
               try {
@@ -298,7 +455,8 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
                     { action: MESSAGE.primeScreencastFrame },
                     { frameId: 0 }
                   ).catch(() => {}),
-                  new Promise(resolve => { timer = setTimeout(resolve, PRIME_TIMEOUT_MS); })
+                  new Promise(resolve => { timer = setTimeout(resolve, PRIME_TIMEOUT_MS); }),
+                  stopWait
                 ]);
               } finally {
                 clearTimeout(timer);
@@ -306,19 +464,31 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
             }
 
             try {
-              frame = await screencast.getFrame(job.tabId, afterAt, FRAME_TIMEOUT_MS);
+              frame = finishing
+                ? job.frameData || screencast.getLatestFrame(job.tabId)
+                : !needsFreshFrame && candidate
+                ? candidate
+                : await Promise.race([screencast.getFrame(job.tabId, afterAt, FRAME_TIMEOUT_MS), stopWait]);
+              if (frame === STOP_WAIT) frame = job.frameData || screencast.getLatestFrame(job.tabId);
+              if (!frame) throw new Error(t("errorNoCapturePage", [], "没有可用于截图的录制页面"));
             } catch (error) {
-              frame = screencast.getLatestFrame(job.tabId);
+              frame = job.frameData || screencast.getLatestFrame(job.tabId);
               if (!frame) throw error;
             }
           }
+          job.frameData = frame;
+          frameMs = Date.now() - frameStartedAt;
+          const persistStartedAt = Date.now();
           await persist(job, base64JpegToBlob(frame.data), job.manual ? "manual" : "automatic");
+          persistMs = Date.now() - persistStartedAt;
         } finally {
-          await broadcastState(false);
+          releaseCapture();
+          job.acquiringCapture = false;
+          broadcastState(false).catch(() => {});
         }
       } catch (error) {
         console.warn("[Screenshots] Step screenshot skipped:", error.message);
-        if (busy) await broadcastState(false).catch(() => {});
+        if (busy) broadcastState(false).catch(() => {});
         const attempts = job.captureAttempts || 0;
         // No re-queueing while finishing: a retry would hold the CDP session open
         // for another round trip, and the step is marked unavailable instead.
@@ -342,8 +512,13 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
           });
         }
       } finally {
+        globalThis.WorkflowRecorderProtocol.recordingDebug("screenshot-timing", {
+          actionId: job.actionId, tabId: job.tabId, manual: !!job.manual,
+          queueMs: startedAt - job.requestedAt, stabilityMs, slotMs, frameMs, persistMs,
+          totalMs: Date.now() - job.requestedAt
+        });
         if (activeJob === job) activeJob = null;
-        await broadcastState(busy, kind).catch(() => {});
+        broadcastState(busy, kind).catch(() => {});
       }
     }
   }
@@ -490,6 +665,8 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
       // Cleared first so the closing broadcast is actually published: the panel
       // would otherwise keep showing whatever "capturing" state it last saw.
       finishing = false;
+      framesFrozen = false;
+      stopWait = new Promise(resolve => { releaseStopWait = resolve; });
       await broadcastState(false).catch(() => {});
     }
   }
@@ -541,6 +718,8 @@ export function createScreenshotManager({ t, queueAction, screencast, mediaStore
   }
 
   return {
+    beginStopping,
+    freezeFrames,
     beforeKeyFor,
     flush,
     getState,
