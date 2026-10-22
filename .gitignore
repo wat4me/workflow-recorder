@@ -4,6 +4,10 @@ playwright-report/
 .playwright-cli/
 dist/
 .local/
+# Maintainer-only planning and one-off release/store submission records.
+/docs/RELEASE_CHECK*.md
+/docs/CHROME_WEB_STORE_REVIEW.md
+/docs/LOCAL_AGENT_BRIDGE_PRD.md
 .env
 .env.*
 !.env.example
