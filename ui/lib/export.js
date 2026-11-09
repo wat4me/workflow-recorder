@@ -1,9 +1,8 @@
 /**
  * ZIP export of recorded workflows.
  *
- * An export is one folder per workflow containing the Markdown document and a
- * screenshots/ directory, so a batch export of several cases stays navigable
- * after unzipping.
+ * An export is one folder per workflow containing the Markdown document and
+ * optional screenshots, so a batch export stays navigable after unzipping.
  *
  * There is no downloads permission: the archive is handed to the page as an
  * object URL and a synthetic anchor click, which puts the file wherever the
@@ -13,6 +12,12 @@
   if (globalThis.RecorderExport) return;
 
   const { t } = globalThis.RecorderI18n;
+  const EXPORT_SCREENSHOTS_KEY = "exportScreenshots";
+
+  async function readIncludeScreenshots() {
+    const stored = await chrome.storage.local.get(EXPORT_SCREENSHOTS_KEY);
+    return stored[EXPORT_SCREENSHOTS_KEY] !== false;
+  }
 
   function triggerDownload(blob, filename) {
     const url = URL.createObjectURL(blob);
@@ -48,16 +53,7 @@
     return normalized;
   }
 
-  async function addWorkflowFolder(writer, workflow) {
-    const actions = workflow.actions || [];
-    if (actions.length === 0) return;
-
-    const baseName = sanitizeExportName(workflow.name);
-    const folder = `${baseName}/`;
-    const doc = globalThis.StepDocGenerator
-      ? globalThis.StepDocGenerator.generate(actions)
-      : "No steps recorded yet.";
-
+  async function addStepScreenshots(writer, folder, actions) {
     const screenshotLines = [];
     for (let index = 0; index < actions.length; index++) {
       const action = actions[index];
@@ -81,6 +77,17 @@
         screenshotLines.push(`- Step ${index + 1} ${frame.label}: ${relativeFilename}`);
       }
     }
+    return screenshotLines;
+  }
+
+  async function addWorkflowFolder(writer, workflow, includeScreenshots) {
+    const { actions } = workflow;
+    const baseName = sanitizeExportName(workflow.name);
+    const folder = `${baseName}/`;
+    const doc = globalThis.StepDocGenerator
+      ? globalThis.StepDocGenerator.generate(actions)
+      : "No steps recorded yet.";
+    const screenshotLines = includeScreenshots ? await addStepScreenshots(writer, folder, actions) : [];
 
     // Appended only once the filenames are known, so the index cannot list a
     // screenshot that failed to read.
@@ -89,21 +96,23 @@
     await writer.add(`${folder}${baseName}.md`, globalThis.fflate.strToU8(document), true);
   }
 
-  async function exportWorkflow(actions, exportName) {
+  async function exportWorkflow(actions, exportName, includeScreenshots) {
     if (!actions || actions.length === 0) return;
 
+    includeScreenshots ??= await readIncludeScreenshots();
     const baseName = sanitizeExportName(exportName);
     const writer = globalThis.RecorderArchiveStream.createWriter();
     try {
-      await addWorkflowFolder(writer, { name: baseName, actions });
+      await addWorkflowFolder(writer, { name: baseName, actions }, includeScreenshots);
       triggerDownload(writer.finish(), `${baseName}.zip`);
     } catch (error) { writer.abort(); throw error; }
   }
 
-  async function exportWorkflowBatch(workflows, archiveName = t("batchCaseArchive", [], "批量用例")) {
+  async function exportWorkflowBatch(workflows, archiveName = t("batchCaseArchive", [], "批量用例"), includeScreenshots) {
     const validWorkflows = (workflows || []).filter(workflow => workflow?.actions?.length);
     if (validWorkflows.length === 0) return;
 
+    includeScreenshots ??= await readIncludeScreenshots();
     const writer = globalThis.RecorderArchiveStream.createWriter();
     // Two cases may carry the same name; suffix duplicates so neither folder
     // silently overwrites the other inside the archive.
@@ -114,7 +123,7 @@
         const count = (usedNames.get(rawName) || 0) + 1;
         usedNames.set(rawName, count);
         const uniqueName = count === 1 ? rawName : `${rawName}-${count}`;
-        await addWorkflowFolder(writer, { ...workflow, name: uniqueName });
+        await addWorkflowFolder(writer, { ...workflow, name: uniqueName }, includeScreenshots);
       }
 
       triggerDownload(
@@ -125,6 +134,8 @@
   }
 
   globalThis.RecorderExport = {
+    EXPORT_SCREENSHOTS_KEY,
+    readIncludeScreenshots,
     exportWorkflow,
     exportWorkflowBatch,
     sanitizeExportName,

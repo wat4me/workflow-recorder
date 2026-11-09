@@ -4,9 +4,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const { strFromU8, unzipSync, zipSync } = require("fflate");
+const { strFromU8, unzipSync } = require("fflate");
 
-function loadExport(blobs) {
+function loadExport(blobs, settings = {}) {
   let downloaded = null;
   const anchor = {
     click() {},
@@ -15,6 +15,7 @@ function loadExport(blobs) {
     download: ""
   };
   const context = {
+    chrome: { storage: { local: { get: async key => ({ [key]: settings[key] }) } } },
     Blob,
     Uint8Array,
     URL: {
@@ -105,4 +106,23 @@ test("a recording made without screenshots still exports its document", async ()
   assert.match(markdown, /Recorded workflow/);
   assert.doesNotMatch(markdown, /## Step screenshots/);
   assert.deepEqual(Object.keys(files).filter(name => name.includes("/screenshots/")), []);
+});
+
+test("the saved preference skips screenshot reads in both single and batch document exports", async () => {
+  const { api, downloaded } = loadExport({
+    get() { assert.fail("a text-only export should not read screenshots"); }
+  }, { exportScreenshots: false });
+  const actions = [{ type: "click", screenshotBeforeKey: "before-key", screenshotKey: "after-key" }];
+
+  await api.exportWorkflow(actions, "single");
+  const single = unzipSync(new Uint8Array(await downloaded().blob.arrayBuffer()));
+  assert.deepEqual(Object.keys(single), ["single/single.md"]);
+  assert.equal(strFromU8(single["single/single.md"]), "# Recorded workflow\n");
+
+  await api.exportWorkflowBatch([{ name: "first", actions }, { name: "second", actions }], "batch");
+  const batch = unzipSync(new Uint8Array(await downloaded().blob.arrayBuffer()));
+  assert.deepEqual(Object.keys(batch), ["first/first.md", "second/second.md"]);
+  for (const document of Object.values(batch)) {
+    assert.equal(strFromU8(document), "# Recorded workflow\n");
+  }
 });

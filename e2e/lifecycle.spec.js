@@ -1184,6 +1184,7 @@ test("public workbench organizes file actions and keeps Bridge records hidden", 
   for (const [selector, extension] of [["#batch-export-cases-btn", ".zip"], ["#export-case-package-btn", ".swrcase"]]) {
     const pending = page.waitForEvent("download");
     await page.locator(selector).click();
+    if (extension === ".zip") await page.locator(".prompt-text-dialog .confirm-submit").click();
     const download = await pending;
     assert.equal(download.suggestedFilename().endsWith(extension), true);
     const stream = await download.createReadStream();
@@ -1497,12 +1498,14 @@ test("recording download fits the icon toolbar and stays available at every widt
   }]);
   await more.waitFor({ state: "visible" });
 
-  // The name is asked for on the first download and remembered afterwards, so the
-  // prompt has to be answered once before the layout loop starts.
+  // The first download asks for a name and saves the screenshot preference.
   await panel.setViewportSize({ width: 360, height: 720 });
   const primedDownload = panel.waitForEvent("download");
   await download.click();
-  await panel.locator(".prompt-text-dialog input").fill("responsive-download");
+  await panel.locator(".prompt-text-dialog input[type=text]").fill("responsive-download");
+  const includeScreenshots = panel.locator("#export-include-screenshots");
+  assert.equal(await includeScreenshots.isChecked(), true);
+  await includeScreenshots.uncheck();
   // The prompt has to say that the download banks the recording too, because that
   // is where the case the user will look for later comes from.
   assert.match(await panel.locator(".prompt-text-dialog #prompt-message").innerText(), /工作台/);
@@ -1569,6 +1572,9 @@ test("recording download fits the icon toolbar and stays available at every widt
       } else {
         await download.click();
       }
+      assert.equal(await panel.locator(".prompt-text-dialog input[type=text]").count(), 0);
+      assert.equal(await includeScreenshots.isChecked(), false);
+      await panel.locator(".prompt-text-dialog .confirm-submit").click();
       const archive = await pending;
       assert.equal(archive.suggestedFilename(), "responsive-download.zip");
       const stream = await archive.createReadStream();
@@ -1603,9 +1609,10 @@ test("recording download fits the icon toolbar and stays available at every widt
   await panel.setViewportSize({width:360,height:720});
   await download.waitFor({state:"visible"});
   await download.click();
-  await panel.locator(".prompt-text-dialog input").waitFor();
-  assert.equal(await panel.locator(".prompt-text-dialog input").inputValue(), "");
-  await panel.locator(".prompt-text-dialog input").fill("new-workspace");
+  const nameInput = panel.locator(".prompt-text-dialog input[type=text]");
+  await nameInput.waitFor();
+  assert.equal(await nameInput.inputValue(), "");
+  await nameInput.fill("new-workspace");
   const newDownload = panel.waitForEvent("download");
   await panel.locator(".prompt-text-dialog .confirm-submit").click();
   assert.equal((await newDownload).suggestedFilename(), "new-workspace.zip");
@@ -1615,8 +1622,14 @@ test("recording download fits the icon toolbar and stays available at every widt
   await panel.evaluate(id=>chrome.runtime.sendMessage({action:"loadCase",caseId:id}),savedCase.id);
   await panel.reload();
   await download.waitFor({state:"visible"});
+  await download.click();
+  assert.equal(await includeScreenshots.isChecked(), false);
+  await includeScreenshots.check();
+  await panel.locator(".prompt-text-dialog .confirm-cancel").click();
   const loadedDownload = panel.waitForEvent("download");
   await download.click();
+  assert.equal(await includeScreenshots.isChecked(), false);
+  await panel.locator(".prompt-text-dialog .confirm-submit").click();
   assert.equal((await loadedDownload).suggestedFilename(), "responsive-download.zip");
   assert.deepEqual(errors, []);
 });
@@ -2007,8 +2020,27 @@ test("side-panel screenshot defaults collapse long recordings while keeping imag
   }
   await panel.locator("#sidebar-screenshots-expanded").check();
   await panel.locator(".capture-settings-dialog .confirm-submit").click();
+  await panel.locator(".capture-settings-dialog").waitFor({ state: "detached" });
   await panel.waitForFunction(() => document.querySelectorAll(".step-media-row[hidden]").length === 0);
   await panel.locator(".step-card img.step-screenshot").first().waitFor();
+
+  const workbench = await context.newPage();
+  await workbench.goto(`chrome-extension://${worker.url().split("/")[2]}/ui/console.html`);
+  await workbench.locator("#case-library-select-all").check();
+  const textDownload = workbench.waitForEvent("download");
+  await workbench.locator("#batch-export-cases-btn").click();
+  const includeScreenshots = workbench.locator("#export-include-screenshots");
+  assert.equal(await includeScreenshots.isChecked(), true);
+  await includeScreenshots.uncheck();
+  await workbench.locator(".prompt-text-dialog .confirm-submit").click();
+  const textChunks = [];
+  for await (const chunk of await (await textDownload).createReadStream()) textChunks.push(chunk);
+  const textFiles = unzipSync(new Uint8Array(Buffer.concat(textChunks)));
+  assert.deepEqual(Object.keys(textFiles), ["Folded workflow/Folded workflow.md"]);
+  assert.doesNotMatch(strFromU8(textFiles["Folded workflow/Folded workflow.md"]), /## Step screenshots/);
+  await panel.locator("#capture-settings-btn").click();
+  assert.equal(await panel.locator("#export-screenshots-enabled").isChecked(), false);
+  await panel.locator(".capture-settings-dialog .confirm-cancel").click();
   assert.deepEqual(errors, []);
 });
 
@@ -2840,7 +2872,7 @@ test("records only the session-opening page navigation", async (t) => {
   await popup.waitForFunction(() => !document.querySelector("#download-doc-compact-btn")?.disabled);
   const packagePromise = popup.waitForEvent("download");
   await exportButton.click();
-  await popup.locator(".prompt-text-dialog input").fill("采购审批:2026");
+  await popup.locator(".prompt-text-dialog input[type=text]").fill("采购审批:2026");
   await popup.locator(".prompt-text-dialog .confirm-submit").click();
   const packageDownload = await packagePromise;
   assert.equal(packageDownload.suggestedFilename(), "采购审批-2026.zip");
@@ -2911,6 +2943,7 @@ test("records only the session-opening page navigation", async (t) => {
   await workbenchPage.locator("#case-library-select-all").check();
   const batchDownloadPromise = workbenchPage.waitForEvent("download");
   await workbenchPage.locator("#batch-export-cases-btn").click();
+  await workbenchPage.locator(".prompt-text-dialog .confirm-submit").click();
   const batchDownload = await batchDownloadPromise;
   assert.match(batchDownload.suggestedFilename(), /^批量用例-\d{4}-\d{2}-\d{2}\.zip$/);
   const batchStream = await batchDownload.createReadStream();
@@ -3895,7 +3928,7 @@ test("a recording can be configured to save no screenshots at all", async (t) =>
   // Export is still a usable document, just without a screenshots folder.
   const pending = panel.waitForEvent("download");
   await panel.locator("#download-doc-compact-btn").click();
-  await panel.locator(".prompt-text-dialog input").fill("无截图用例");
+  await panel.locator(".prompt-text-dialog input[type=text]").fill("无截图用例");
   await panel.locator(".prompt-text-dialog .confirm-submit").click();
   const archive = await pending;
   const chunks = [];
@@ -4113,6 +4146,7 @@ test("workbench renames a case without losing its folder, selection or loaded wo
   await popup.locator("#more-actions-btn").click();
   const downloaded = popup.waitForEvent("download");
   await popup.locator("#download-doc-btn").click();
+  await popup.locator(".prompt-text-dialog .confirm-submit").click();
   assert.equal((await downloaded).suggestedFilename(), "新用例名称（2）.zip");
   const afterDownload = await send({ action: "listCases" });
   assert.equal(afterDownload.cases.length, 2);

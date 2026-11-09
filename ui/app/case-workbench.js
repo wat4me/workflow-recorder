@@ -15,7 +15,7 @@ if (!globalThis.RecorderCaseWorkbench) {
     const { t } = globalThis.RecorderI18n;
     const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
     const { sendRuntimeMessage } = globalThis.RecorderBridge;
-    const { confirmAction, notify, promptText, reportError } = globalThis.RecorderDialogs;
+    const { confirmAction, notify, promptDocumentExport, promptText, reportError } = globalThis.RecorderDialogs;
     const { exportWorkflowBatch } = globalThis.RecorderExport;
     const { exportCasePackage, importCasePackage } = globalThis.RecorderCasePackage;
 
@@ -28,6 +28,7 @@ if (!globalThis.RecorderCaseWorkbench) {
       draggedCaseIds: [], selectedIds: new Set(), disposed: false
     };
     attachFolders(ctx);
+    let exportDocumentsPending = false;
 
     function localeTag() {
       return globalThis.RecorderI18n.getLanguage() === "zh_CN" ? "zh-CN" : "en";
@@ -40,7 +41,7 @@ if (!globalThis.RecorderCaseWorkbench) {
       selectAll.checked = visibleIds.length > 0 && visibleSelected === visibleIds.length;
       selectAll.indeterminate = visibleSelected > 0 && visibleSelected < visibleIds.length;
       exportPackageButton.disabled = ctx.selectedIds.size === 0;
-      exportDocumentsButton.disabled = ctx.selectedIds.size === 0;
+      exportDocumentsButton.disabled = exportDocumentsPending || ctx.selectedIds.size === 0;
       deleteCasesButton.disabled = ctx.selectedIds.size === 0;
       moveToFolderButton.disabled = ctx.selectedIds.size === 0;
       selectionLabel.textContent = ctx.selectedIds.size > 0
@@ -384,10 +385,10 @@ if (!globalThis.RecorderCaseWorkbench) {
       render();
       onCasesChanged(ctx.cases);
     }
-    async function readSelectedCases() {
+    async function readSelectedCases(selectedIds = ctx.selectedIds) {
       const details = [];
       const failed = [];
-      for (const summary of ctx.cases.filter(item => ctx.selectedIds.has(item.id))) {
+      for (const summary of ctx.cases.filter(item => selectedIds.has(item.id))) {
         const response = await sendRuntimeMessage({ action: MESSAGE.getCaseDetails, caseId: summary.id }, 30000);
         if (!response?.success) failed.push(summary.name);
         else details.push(response.case);
@@ -453,16 +454,24 @@ if (!globalThis.RecorderCaseWorkbench) {
       if (response.cleanupPending) notify(t("screenshotCleanupDeferred", [], "用例已删除，截图将在后台重试清理"));
     });
     exportDocumentsButton.addEventListener("click", async () => {
+      if (exportDocumentsPending) return;
+      exportDocumentsPending = true;
       exportDocumentsButton.disabled = true;
+      const selectedIds = new Set(ctx.selectedIds);
       try {
-        const details = await readSelectedCases();
+        const options = await promptDocumentExport({ title: t("batchExport", [], "导出文档") });
+        if (!options) return;
+        const details = await readSelectedCases(selectedIds);
         if (details.length > 0) {
           const stamp = new Date().toISOString().slice(0, 10);
-          await exportWorkflowBatch(details, `${t("batchCaseArchive", [], "批量用例")}-${stamp}`);
+          await exportWorkflowBatch(details, `${t("batchCaseArchive", [], "批量用例")}-${stamp}`, options.includeScreenshots);
         }
       } catch (error) {
         reportError(error.message || t("exportFailed", [], "导出失败"));
-      } finally { updateSelection(); }
+      } finally {
+        exportDocumentsPending = false;
+        updateSelection();
+      }
     });
     exportPackageButton.addEventListener("click", async () => {
       exportPackageButton.disabled = true;

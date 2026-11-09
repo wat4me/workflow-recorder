@@ -22,7 +22,7 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
     const { t } = globalThis.RecorderI18n;
     const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
     const { readActions, sendRuntimeMessage: sendMessage } = globalThis.RecorderBridge;
-    const { confirmAction, notify, promptText, reportError } = globalThis.RecorderDialogs;
+    const { confirmAction, notify, promptDocumentExport, promptText, reportError } = globalThis.RecorderDialogs;
     const { ensureRecordingConsent } = globalThis.RecorderConsent;
     const { exportWorkflow } = globalThis.RecorderExport;
     const { CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, recordingCapturePlanFor } = globalThis.RecorderCaptureSettings;
@@ -33,10 +33,9 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
     let recordingRequestPending = false;
     let stopRequestPending = false;
     let copyRequestPending = false;
+    let downloadPending = false;
     let screenshotsEnabled = true;
-    // The case name is asked for when it is needed instead of living in a field
-    // on the page. Remembering the answer is what lets exporting and copying an
-    // already-named workspace stay a single click.
+    // Named workspaces can be downloaded without asking for a name again.
     let caseName = "";
     let workspaceNameKey = "";
     // Kept so a capture-progress change can repaint the status tags without
@@ -127,25 +126,6 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
       moreActionsBtn.setAttribute("aria-expanded", "false");
     }
 
-    /**
-     * Asks for the case name and remembers it. Resolves null when the user
-     * cancels, which callers must treat as "do nothing" rather than as an empty
-     * name: an empty name is a deliberate choice and means "let the worker name
-     * it" for a save, or the default export name for a download.
-     */
-    async function askCaseName({ title, message = "", confirmText }) {
-      const answer = await promptText({
-        title,
-        message,
-        label: t("caseName", [], "用例名称"),
-        value: caseName,
-        confirmText
-      });
-      if (answer === null) return null;
-      caseName = answer;
-      return answer;
-    }
-
     /** The confirmation flash shared by the save button and a saving download. */
     function flashSaved() {
       saveCurrentCaseBtn.classList.add("success");
@@ -167,9 +147,10 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
         if (!canContinue) closeMoreActions();
       }
       downloadDocBtn.hidden = !canContinue;
+      downloadDocBtn.disabled = recordingRequestPending || downloadPending || !canContinue;
       if (downloadDocCompactBtn) {
         downloadDocCompactBtn.hidden = !canContinue;
-        downloadDocCompactBtn.disabled = recordingRequestPending || renderedActions.length === 0;
+        downloadDocCompactBtn.disabled = downloadDocBtn.disabled;
       }
       if (clearStepsBtn) clearStepsBtn.disabled = recordingRequestPending || !canContinue;
     }
@@ -548,34 +529,26 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
       });
 
       async function downloadRecording() {
+        if (downloadPending) return;
+        downloadPending = true;
+        updateSecondaryActions(!isRecording && renderedActions.length > 0);
         const workspaceDraftId = renderedStored?.draftId;
-        // `activeCaseId` only names the workspace while it still matches that case:
-        // recording or editing a step clears it. That is what says whether this
-        // download has to bank the recording before handing over the archive.
-        const { activeCaseId, workspaceOrigin } = renderedStored?.draftId
-          ? renderedStored : await chrome.storage.local.get(["activeCaseId", "workspaceOrigin"]);
-        // The name is asked for once: a workspace that was saved or exported
-        // already carries one, and re-asking on every download would be noise.
-        let name = caseName || await askCaseName({
-          title: t("exportResult", [], "下载录制结果"),
-          message: activeCaseId
-            ? t(
-              "exportAlreadySavedHint",
-              [],
-              "当前录制已保存为用例，下载不会重复保存；可在工作台查看全部用例。"
-            )
-            : t(
-              "exportSaveCaseHint",
-              [],
-              "下载会同时把当前录制保存为用例，之后可在工作台查看全部用例。"
-            ),
-          confirmText: t("exportResult", [], "下载录制结果")
-        });
-        if (name === null) return;
-
-        downloadDocBtn.disabled = true;
-        if (downloadDocCompactBtn) downloadDocCompactBtn.disabled = true;
+        const workspaceKey = workspaceNameKey;
+        let name = caseName;
         try {
+          // Editing a step clears activeCaseId, so an edited workspace needs a new saved case.
+          const { activeCaseId, workspaceOrigin } = workspaceDraftId
+            ? renderedStored : await chrome.storage.local.get(["activeCaseId", "workspaceOrigin"]);
+          const options = await promptDocumentExport({
+            title: t("exportResult", [], "下载录制结果"),
+            message: activeCaseId
+              ? t("exportAlreadySavedHint", [], "当前录制已保存为用例，可在工作台查看。")
+              : t("exportSaveCaseHint", [], "下载会同时把当前录制保存为用例，之后可在工作台查看全部用例。"),
+            value: name ? null : ""
+          });
+          if (!options) return;
+          name ||= options.name;
+
           if (!activeCaseId) {
             const history = await sendRuntimeMessage({ action: MESSAGE.listCases });
             if (!history?.success) throw new Error(history?.error || t("listCasesFailed", [], "读取历史用例失败"));
@@ -591,17 +564,19 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
               return;
             }
             name = saved.case?.name || name;
-            caseName = name;
-            flashSaved();
+            if (workspaceNameKey === workspaceKey) {
+              caseName = name;
+              flashSaved();
+            }
           }
           const response = await sendRuntimeMessage({ action: MESSAGE.getActions, workspaceDraftId });
           if (!response?.success) throw new Error(response?.error || "草稿读取失败");
-          await exportWorkflow(response.actions, name);
+          await exportWorkflow(response.actions, name, options.includeScreenshots);
         } catch (error) {
           reportError(error.message || t("exportFailed", [], "导出失败"));
         } finally {
-          downloadDocBtn.disabled = false;
-          if (downloadDocCompactBtn) downloadDocCompactBtn.disabled = false;
+          downloadPending = false;
+          updateSecondaryActions(!isRecording && renderedActions.length > 0);
         }
       }
 

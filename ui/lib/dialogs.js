@@ -130,7 +130,7 @@
     update();
   }
 
-  /** Resolves with text (and an optional selection), or null if cancelled. */
+  /** Resolves with text and any extra fields, or null if cancelled. A null value omits the text field. */
   function promptText({
     title = t("confirmAction", [], "确认操作"),
     message = "",
@@ -139,7 +139,8 @@
     value = "",
     maxLength = 120,
     selection = null,
-    validate = null
+    validate = null,
+    checkbox = null
   } = {}) {
     return new Promise(resolve => {
       const overlay = document.createElement("div");
@@ -150,10 +151,15 @@
           <div class="confirm-content">
             <h3 id="prompt-title"></h3>
             <p id="prompt-message"></p>
-            <label class="recording-name-field">
+            ${value === null ? "" : `<label class="recording-name-field">
               <span></span>
               <input type="text" autocomplete="off">
+            </label>`}
+            ${checkbox ? `<label class="capture-screenshots-toggle">
+              <input type="checkbox" id="export-include-screenshots" aria-describedby="prompt-checkbox-hint">
+              <span>${escapeHtml(checkbox.label)}</span>
             </label>
+            <p class="capture-settings-hint" id="prompt-checkbox-hint">${escapeHtml(checkbox.hint)}</p>` : ""}
           </div>
           <div class="confirm-actions">
             <button type="button" class="confirm-cancel">${escapeHtml(t("cancel", [], "取消"))}</button>
@@ -165,25 +171,28 @@
       const messageEl = overlay.querySelector("#prompt-message");
       messageEl.textContent = message;
       messageEl.hidden = !message;
-      overlay.querySelector(".recording-name-field span").textContent = label || title;
       overlay.querySelector(".confirm-submit").textContent = confirmText;
 
-      const input = overlay.querySelector("input");
-      input.maxLength = maxLength;
-      input.value = value;
-      limitNameInput(input, maxLength);
+      const input = overlay.querySelector('input[type="text"]');
+      const checkboxInput = overlay.querySelector('input[type="checkbox"]');
+      if (checkboxInput) checkboxInput.checked = checkbox.checked;
       const error = document.createElement("p");
-      error.id = "prompt-validation-error";
-      error.className = "prompt-validation-error";
-      error.setAttribute("role", "alert");
-      error.hidden = true;
-      input.setAttribute("aria-describedby", error.id);
-      input.closest("label").after(error);
       const clearError = () => {
         error.hidden = true;
-        input.removeAttribute("aria-invalid");
+        input?.removeAttribute("aria-invalid");
       };
-      input.addEventListener("input", clearError);
+      if (input) {
+        overlay.querySelector(".recording-name-field span").textContent = label || title;
+        input.value = value;
+        limitNameInput(input, maxLength);
+        error.id = "prompt-validation-error";
+        error.className = "prompt-validation-error";
+        error.setAttribute("role", "alert");
+        error.hidden = true;
+        input.setAttribute("aria-describedby", error.id);
+        input.closest("label").after(error);
+        input.addEventListener("input", clearError);
+      }
 
       let picker = null;
       if (selection) {
@@ -203,7 +212,7 @@
         resolve(result);
       };
       const submit = () => {
-        const text = input.value.trim();
+        const text = input?.value.trim() ?? "";
         const message = validate?.(text, picker?.value);
         if (message) {
           error.textContent = message;
@@ -212,11 +221,15 @@
           input.focus();
           return;
         }
-        finish(picker ? { text, selection: picker.value } : text);
+        if (checkboxInput) finish({ text, checked: checkboxInput.checked });
+        else finish(picker ? { text, selection: picker.value } : text);
       };
       const onKeyDown = event => {
-        if (event.key === "Escape") finish(null);
-        if (event.key === "Enter") {
+        // Escape cancels and Enter submits only from the name field. On a focused
+        // button Enter belongs to that button, and an IME composition keeps its
+        // Enter for itself.
+        if (event.key === "Escape" && !event.isComposing) finish(null);
+        if (event.key === "Enter" && !event.isComposing && event.target === input) {
           event.preventDefault();
           submit();
         }
@@ -229,9 +242,28 @@
       });
       document.addEventListener("keydown", onKeyDown);
       document.body.appendChild(overlay);
-      input.focus();
-      input.select();
+      (input || checkboxInput || overlay.querySelector(".confirm-submit")).focus();
+      input?.select();
     });
+  }
+
+  async function promptDocumentExport({ title, message, value = null }) {
+    const { EXPORT_SCREENSHOTS_KEY, readIncludeScreenshots } = globalThis.RecorderExport;
+    const result = await promptText({
+      title,
+      message,
+      value,
+      label: t("caseName", [], "用例名称"),
+      confirmText: title,
+      checkbox: {
+        label: t("exportScreenshotsLabel", [], "导出文档时附带截图"),
+        hint: t("exportScreenshotsRemembered", [], "下次导出会沿用此次选择。"),
+        checked: await readIncludeScreenshots()
+      }
+    });
+    if (result === null) return null;
+    await chrome.storage.local.set({ [EXPORT_SCREENSHOTS_KEY]: result.checked });
+    return { name: result.text, includeScreenshots: result.checked };
   }
 
   /**
@@ -295,6 +327,7 @@
     confirmAction,
     decideRecordingBeforeOpen,
     notify,
+    promptDocumentExport,
     promptText,
     reportError
   };

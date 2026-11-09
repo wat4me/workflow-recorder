@@ -1,14 +1,8 @@
 /**
  * Recording settings dialog.
  *
- * Screenshots are the only part of a recording whose cost the user can trade away,
- * so this dialog is where that trade is made: capture them or do not. There used to
- * be three sharpness presets beside the switch; measurement showed they differed by
- * less than the run-to-run noise of a single preset, so the switch is the honest
- * version of that choice and the presets are gone.
- *
  * Capture changes apply to the next recording. Side-panel display preferences
- * apply immediately and are stored separately from the session capture policy.
+ * apply immediately, and document exports use the latest saved preference.
  */
 (function () {
   if (globalThis.RecorderSettingsDialog) return;
@@ -22,8 +16,11 @@
    * Resolves true when settings were saved, false when the user backed out.
    */
   async function openCaptureSettings() {
-    const [current, storedDisplay] = await Promise.all([
-      settings.readCaptureSettings(), chrome.storage.local.get(displaySettings.STEP_DISPLAY_SETTINGS_KEY)
+    const { EXPORT_SCREENSHOTS_KEY, readIncludeScreenshots } = globalThis.RecorderExport;
+    const [current, storedDisplay, includeScreenshots] = await Promise.all([
+      settings.readCaptureSettings(),
+      chrome.storage.local.get(displaySettings.STEP_DISPLAY_SETTINGS_KEY),
+      readIncludeScreenshots()
     ]);
     const currentDisplay = displaySettings.normalize(storedDisplay[displaySettings.STEP_DISPLAY_SETTINGS_KEY]);
     return new Promise(resolve => {
@@ -55,6 +52,14 @@
               "sidebarScreenshotsExpandedHint", [],
               "关闭后，侧边栏截图默认折叠，可逐步展开查看。保存后立即生效，不影响截图采集、保存和导出。"
             ))}</p>
+            <label class="capture-screenshots-toggle">
+              <input type="checkbox" id="export-screenshots-enabled" aria-describedby="export-screenshots-hint">
+              <span>${escapeHtml(t("exportScreenshotsLabel", [], "导出文档时附带截图"))}</span>
+            </label>
+            <p class="capture-settings-hint" id="export-screenshots-hint">${escapeHtml(t(
+              "exportScreenshotsHint", [],
+              "适用于侧边栏下载和工作台导出。关闭后，ZIP 仅包含 Markdown 文档。"
+            ))}</p>
             <p class="capture-settings-footnote">${escapeHtml(t(
               "captureSettingsFootnote",
               [],
@@ -77,6 +82,8 @@
       toggle.checked = current.screenshots;
       const expandedToggle = overlay.querySelector("#sidebar-screenshots-expanded");
       expandedToggle.checked = currentDisplay.screenshotsExpanded;
+      const exportToggle = overlay.querySelector("#export-screenshots-enabled");
+      exportToggle.checked = includeScreenshots;
       for (const [id, action] of [["export-recording-debug", "exportRecordingDebug"], ["clear-recording-debug", "clearRecordingDebug"]]) {
         const button = overlay.querySelector(`#${id}`);
         button?.addEventListener("click", async () => {
@@ -103,7 +110,8 @@
         try {
           if (saved) await chrome.storage.local.set({
             [settings.CAPTURE_SETTINGS_KEY]: settings.normalizeCaptureSettings({ screenshots: toggle.checked }),
-            [displaySettings.STEP_DISPLAY_SETTINGS_KEY]: displaySettings.normalize({ screenshotsExpanded: expandedToggle.checked })
+            [displaySettings.STEP_DISPLAY_SETTINGS_KEY]: displaySettings.normalize({ screenshotsExpanded: expandedToggle.checked }),
+            [EXPORT_SCREENSHOTS_KEY]: exportToggle.checked
           });
           document.removeEventListener("keydown", onKeyDown);
           overlay.remove();
