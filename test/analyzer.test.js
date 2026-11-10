@@ -40,7 +40,8 @@ function fakeElement({ tag, text = "", attrs = {} } = {}) {
     textContent: text,
     attributes: Object.entries(attrs).map(([name, value]) => ({ name, value })),
     getAttribute(name) { return attrs[name] !== undefined ? attrs[name] : null; },
-    hasAttribute(name) { return attrs[name] !== undefined; }
+    hasAttribute(name) { return attrs[name] !== undefined; },
+    closest() { return null; }
   };
 }
 
@@ -60,6 +61,22 @@ test("explicit aria-label provides the semantic name", () => {
   const analyzer = loadAnalyzer();
   const el = fakeElement({ tag: "DIV", text: "内部文字", attrs: { "aria-label": "外部标签" } });
   assert.equal(analyzer.computeAccessibleName(el), "外部标签");
+});
+
+test("DOM hints retain the source that supplied the role and name", () => {
+  const analyzer = loadAnalyzer();
+  const attrs = { type: "button", value: "登 录" };
+  const input = fakeElement({ tag: "INPUT", attrs });
+  assert.equal(analyzer.getRoleHint(input).role, "button");
+  assert.equal(analyzer.getRoleHint(input).source, "input[type]");
+  assert.equal(analyzer.getAccessibleNameHint(input).name, "登 录");
+  assert.equal(analyzer.getAccessibleNameHint(input).source, "value");
+
+  // The source still changes when a higher-priority attribute has the same text.
+  attrs["aria-label"] = attrs.value;
+  attrs.role = "button";
+  assert.equal(analyzer.getRoleHint(input).source, "role");
+  assert.equal(analyzer.getAccessibleNameHint(input).source, "aria-label");
 });
 
 test("sanitizeHTML collapses inline SVG and strips style/on* attributes", () => {

@@ -49,6 +49,10 @@ function describePayload(action) {
     case "navigate":
     case "newPage":
       return normalize(action.url);
+    case "click":
+      return normalize(action.customTargetName);
+    case "browserDialog":
+      return JSON.stringify([action.dialogType, action.dialogMessage, action.dialogResult, action.dialogInput]);
     case "type":
       return normalize(action.value);
     case "select":

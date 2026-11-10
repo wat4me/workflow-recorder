@@ -14,6 +14,9 @@ const emptyState = () => ({ isRecording: false, recordingTabIds: [], tabsMapping
   nextPageNumber: 1, activeCaseId: null, workspaceOrigin: null, recordingCaptureSettings: null });
 const uniqueTabs = ids => [...new Set((ids || []).filter(Number.isInteger))];
 const scopeTabs = state => uniqueTabs([...(state.recordingTabIds || []), ...(state.resumableScope?.tabIds || [])]);
+const bindTabs = (index, draftId, tabs) => index.map(entry => entry.id === draftId
+  ? { ...entry, tabIds: uniqueTabs([...(entry.tabIds || []), ...tabs]) }
+  : { ...entry, tabIds: (entry.tabIds || []).filter(id => !tabs.includes(id)) });
 
 export async function readDraftMediaKeys() {
   const stored = await chrome.storage.local.get([DRAFT_INDEX_KEY, ACTIVE_DRAFT_KEY]);
@@ -51,9 +54,7 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
         state = await readState();
         index = state[DRAFT_INDEX_KEY] || [];
         const tabs = uniqueTabs([...currentScope, tabId]);
-        index = index.map(entry => entry.id === currentId
-          ? { ...entry, tabIds: uniqueTabs([...(entry.tabIds || []), ...tabs]) }
-          : { ...entry, tabIds: (entry.tabIds || []).filter(id => !tabs.includes(id)) });
+        index = bindTabs(index, currentId, tabs);
         await chrome.storage.local.set({ [DRAFT_INDEX_KEY]: index });
         return { success: true, draftId: currentId, switched: false };
       });
@@ -165,6 +166,24 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
     }
   }
 
+  function joinRecordingPage(tabId, draftId) {
+    return queueCaseWrite(async () => {
+      const state = await readState();
+      const index = state[DRAFT_INDEX_KEY] || [];
+      if (!state.isRecording || state[ACTIVE_DRAFT_KEY] !== draftId || !index.some(entry => entry.id === draftId)) {
+        return { success: false };
+      }
+      const recordingTabIds = uniqueTabs([...(state.recordingTabIds || []), tabId]);
+      const tabsMapping = { ...(state.tabsMapping || {}) };
+      let nextPageNumber = Number(state.nextPageNumber) || 2;
+      const pageName = tabsMapping[tabId] ||= `page${nextPageNumber++}`;
+      // Keep the old draft's snapshot and transfer only its tab association.
+      await chrome.storage.local.set({ recordingTabIds, tabsMapping, nextPageNumber,
+        [DRAFT_INDEX_KEY]: bindTabs(index, draftId, [tabId]) });
+      return { success: true, pageName };
+    });
+  }
+
   async function finishPendingRemovals(stored) {
     const pending = stored[PENDING_REMOVALS_KEY] || [];
     if (!pending.length) return;
@@ -221,5 +240,5 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
         ...(tabId === null ? { resumableScope: null, recordingTabIds: [], isRecording: false, tabsMapping: {} } : {}) });
     });
   }
-  return { activate, read, assertActive, unbind, enforceLimit };
+  return { activate, read, assertActive, joinRecordingPage, unbind, enforceLimit };
 }

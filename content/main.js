@@ -36,14 +36,14 @@
   let isRecording = false;
   const pendingActions = new Set();
   let hasRecordedNavigation = false;
-  const pageStability = globalThis.RecorderPageStability.create();
+  const inputRecorder = globalThis.RecorderInputRecorder.create({ recordAction });
+  const pageStability = globalThis.RecorderPageStability.create({ beforeInteraction: inputRecorder.flushClickClear });
   const framePrimer = globalThis.RecorderScreencastFramePrimer.create();
   const dragRecorder = globalThis.RecorderDragRecorder.create({
     isRecording: () => isRecording,
     recordAction,
     getInteractableTarget
   });
-  const inputRecorder = globalThis.RecorderInputRecorder.create({ recordAction });
 
   // Hover tracking states
   let lastHoveredElement = null;
@@ -118,6 +118,16 @@
     }
   }
 
+  function endLocalRecording() {
+    isRecording = false;
+    inputRecorder.reset();
+    lastHoveredElement = null;
+    closeKeepalive();
+    hasRecordedNavigation = false;
+    framePrimer.dispose();
+    removeEventListeners();
+  }
+
   window.addEventListener("pagehide", () => {
     pageSuspended = true;
     closeKeepalive();
@@ -135,12 +145,7 @@
         attachEventListeners();
         openKeepalive();
       } else {
-        closeKeepalive();
-        hasRecordedNavigation = false;
-        lastHoveredElement = null;
-        inputRecorder.reset();
-        framePrimer.dispose();
-        removeEventListeners();
+        endLocalRecording();
       }
     });
   });
@@ -167,15 +172,7 @@
       // Commit pending input while recordAction can still send it. The worker
       // drains those messages before releasing the capture sessions.
       inputRecorder.flush();
-      isRecording = false;
-      inputRecorder.reset();
-      lastHoveredElement = null;
-      closeKeepalive();
-      // Scoped to the session, not to the document: the next fresh recording
-      // started on this same page needs its own opening step.
-      hasRecordedNavigation = false;
-      framePrimer.dispose();
-      removeEventListeners();
+      endLocalRecording();
       // sendMessage delivery can arrive after this stop handler's reply. Wait
       // for committed actions (especially the flushed input) before allowing
       // the worker to drain/replace this workspace with another tab's draft.
@@ -197,14 +194,13 @@
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || window.top !== window) return;
-    if (changes.isRecording) {
-      isRecording = !!changes.isRecording.newValue;
-      // Also the fallback for releasing the hold: a backgrounded tab may never get
-      // the stopRecording message, and a port left open would keep the worker alive
-      // for a recording that already ended.
-      if (isRecording) openKeepalive();
-      else closeKeepalive();
+    if (area !== "local" || !changes.isRecording) return;
+    if (!changes.isRecording.newValue) {
+      // A renderer blocked by a native dialog may miss the explicit stop.
+      if (isRecording) endLocalRecording();
+    } else if (window.top === window) {
+      isRecording = true;
+      openKeepalive();
     }
   });
 
@@ -365,6 +361,7 @@
       console.log("[Workflow Recorder] Click captured:", analysis);
       const effectBaseline = pageStability.getEffectVersion();
       const debugClickId = pageStability.traceClick(event, target, effectBaseline);
+      inputRecorder.scheduleCommittedCheck(() => pageStability.confirmClickInputClear(debugClickId));
       recordAction({
         type: "click",
         target: analysis,
@@ -383,6 +380,8 @@
       }, MESSAGE.logClickAction, {
         effectBaseline,
         debugClickId,
+        expectNewPage: target.matches("a[href]") && ((target.getAttribute("target") || "").toLowerCase() === "_blank" ||
+          event.ctrlKey || event.metaKey || event.shiftKey),
         // Native links (including downloads/new tabs) and explicit handlers are
         // meaningful intents even when navigation delays message delivery.
         forceValid: target.tagName === "CANVAS" ||
@@ -392,8 +391,6 @@
     } else {
       console.warn("[Workflow Recorder] SemanticElementAnalyzer not available");
     }
-
-    inputRecorder.scheduleCommittedCheck();
   }
 
   /**
@@ -431,6 +428,9 @@
     }
 
     if (key === "Enter" || key === "Tab" || key === "Escape") {
+      // An IME holds Enter and Escape while composing: those keys commit or
+      // cancel the candidate, not the workflow. keyCode 229 is the same signal.
+      if (event.isComposing || event.keyCode === 229) return;
       // Flush active typing before capturing standard hotkeys.
       inputRecorder.flush();
 

@@ -1,19 +1,13 @@
 /* ── Steps Section ── */
-/* Section bars share one card language. This strip frames the same kind of thing
-   the artifact bar above does -- a title plus the controls for the list under it --
-   so the step cards are not sandwiched between a card and a bare row.
-   The 1px border plus 10px padding puts this title on the artifact bar's left edge. */
 .steps-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 32px;
-  padding: 5px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--bg-primary);
-  box-shadow: var(--shadow-xs);
+  min-height: 30px;
+  padding-block: 3px;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .steps-section-head h2 {
@@ -89,6 +83,10 @@
   background: #94a3b8;
 }
 
+:root[data-theme="dark"] .steps-container::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+}
+
 /* ── Empty State ── */
 /* Needed because the `display` below beats the UA rule behind `hidden`. */
 .empty-state[hidden] {
@@ -157,7 +155,6 @@
 @media (max-width: 380px) {
   .steps-section-head {
     flex-wrap: wrap;
-    padding-block: 4px;
   }
 }
 
@@ -207,7 +204,7 @@
    which is the one the user is looking for. Scoped to the recording state: on a
    saved case the filled circle reads as "selected", which it is not. */
 .steps-container.is-recording .step-card.is-last-step .step-index {
-  background: var(--accent-color);
+  background: var(--accent-fill);
   color: #fff;
 }
 
@@ -241,6 +238,14 @@
   line-height: 16px;
 }
 
+.step-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.step-rename-btn,
 .step-delete-btn {
   display: inline-flex;
   align-items: center;
@@ -255,6 +260,11 @@
   transition: var(--transition-fast);
   flex-shrink: 0;
   opacity: 1;
+}
+
+.step-rename-btn:hover {
+  background: var(--accent-light);
+  color: var(--accent-color);
 }
 
 .step-delete-btn:hover {
@@ -313,6 +323,13 @@
   background: #ffedd5;
   color: #c2410c;
 }
+
+:root[data-theme="dark"] .step-type-badge.type { background: #37294c; color: #d8b7ff; }
+:root[data-theme="dark"] .step-type-badge.select { background: #442a40; color: #ffb6dc; }
+:root[data-theme="dark"] .step-type-badge.newpage { background: var(--accent-subtle); color: var(--accent-color); }
+:root[data-theme="dark"] .step-type-badge.presskey { background: var(--warning-light); color: var(--warning-text); }
+:root[data-theme="dark"] .step-type-badge.hover { background: #1a3b38; color: #8ee2d4; }
+:root[data-theme="dark"] .step-type-badge.drag { background: #452e23; color: #ffbd9a; }
 
 .step-page-tag {
   font-size: 10px;
@@ -473,27 +490,23 @@
 .step-screenshots-toggle {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
+  min-width: 28px;
+  min-height: 24px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: var(--bg-secondary);
   color: var(--text-secondary);
   font: inherit;
   font-size: 10px;
   cursor: pointer;
 }
 
-.step-screenshots-toggle::before {
-  content: "›";
-  font-size: 14px;
-  line-height: 1;
-}
-
-.step-screenshots-toggle[aria-expanded="true"]::before {
-  transform: rotate(90deg);
-}
-
-.step-screenshots-toggle:hover {
+.step-screenshots-toggle:hover,
+.step-screenshots-toggle[aria-expanded="true"] {
+  background: var(--accent-light);
   color: var(--accent-color);
 }
 
@@ -501,6 +514,176 @@
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
   border-radius: var(--radius-xs);
+}
+
+/* The side panel shows a continuous list. The workbench keeps its larger
+   screenshot-first cards. */
+.steps-container.steps-compact {
+  gap: 0;
+}
+
+.steps-container.steps-compact > .step-card {
+  --step-page-color: var(--accent-color);
+  display: grid;
+  grid-template-columns: 14px minmax(20px, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 3px 4px;
+  padding: 6px;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.steps-compact > .step-card[data-page-tone="1"] { --step-page-color: #0f766e; }
+.steps-compact > .step-card[data-page-tone="2"] { --step-page-color: #0369a1; }
+.steps-compact > .step-card[data-page-tone="3"] { --step-page-color: #92400e; }
+:root[data-theme="dark"] .step-card[data-page-tone="1"] { --step-page-color: #78dccc; }
+:root[data-theme="dark"] .step-card[data-page-tone="2"] { --step-page-color: #8acfff; }
+:root[data-theme="dark"] .step-card[data-page-tone="3"] { --step-page-color: #f5cb85; }
+
+.steps-compact > .step-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto -1px 0;
+  width: 2px;
+  background: color-mix(in srgb, var(--step-page-color) 30%, var(--bg-secondary));
+  pointer-events: none;
+}
+
+.steps-compact > .step-card:has(.step-page-heading:not([hidden]))::before {
+  background: var(--step-page-color);
+}
+
+.steps-container.steps-compact > .step-card:is(:hover, :focus-within) {
+  background: var(--bg-primary);
+}
+
+.steps-container.steps-compact > .step-card.is-selected {
+  background: var(--accent-light);
+  border-bottom-color: var(--accent-color);
+}
+
+.steps-compact .step-card::after {
+  display: none;
+}
+
+.steps-compact .step-page-heading:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0 -6px 2px;
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--step-page-color) 8%, var(--bg-primary));
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.steps-compact .step-page-name {
+  flex-shrink: 0;
+  max-width: 45%;
+  padding-inline: 4px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--step-page-color) 15%, var(--bg-primary));
+  color: var(--step-page-color);
+}
+
+.steps-compact .step-page-label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.steps-compact .step-page-checkbox[hidden] {
+  display: none;
+}
+
+.steps-compact .step-page-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding-inline: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.steps-compact .step-page-toggle:hover {
+  background: var(--bg-primary);
+  color: var(--step-page-color);
+}
+
+.steps-compact .step-page-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.steps-compact > .is-page-collapsed > :not(.step-page-heading) {
+  display: none;
+}
+
+.steps-compact .is-page-collapsed .step-page-heading {
+  margin-bottom: 0;
+}
+
+.steps-compact :is(.step-page-name, .step-page-title) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.steps-compact :is(.step-index, .step-select-checkbox) {
+  margin: 0;
+}
+
+.steps-compact .step-index {
+  width: auto;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+}
+
+.steps-compact .step-details {
+  display: contents;
+}
+
+.steps-compact :is(.step-header, .step-status-tag, .step-media-row) {
+  grid-column: 3;
+}
+
+.steps-compact .step-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.steps-compact .step-description {
+  min-width: 0;
+  margin: 0;
+  line-height: 1.45;
+  letter-spacing: 0.015em;
+}
+
+.steps-compact .step-card-actions {
+  gap: 2px;
+}
+
+.steps-compact .step-status-tag {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.steps-compact .step-media-row:not(:has(.step-media)) {
+  display: none;
 }
 
 .step-media-slot {
@@ -826,19 +1009,14 @@
   gap: 8px;
 }
 
-/* Right-aligned, which makes the LAST child the fixed anchor: select-all keeps its
-   place, and the batch action that only exists while something is selected grows in
-   to its left. Keep the delete button first in the markup for that reason. */
 .step-batch-actions {
-  gap: 7px;
-  justify-content: flex-end;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .step-select-all {
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
+  flex: 0 0 22px;
+  height: 28px;
 }
 
 /* Selecting is a transient state, not a permanent toolbar: until the user picks a
@@ -852,22 +1030,21 @@
 }
 
 /* No steps yet, so there is nothing to select. */
-.steps-section-head.is-empty .step-batch-actions {
+.steps-section-head.is-empty :is(.step-select-all, .step-clear-btn) {
   display: none;
 }
 
-/* The batch action is sized to the row it lives in, not to .btn's own 34px: at its
-   natural height the section head is the same height whether or not something is
-   selected, so showing the delete button does not make the card grow. It shares
-   this geometry with the clear control beside it -- same height, radius, weight and
-   no shadow -- so the two read as one row of controls that differ only in colour.
-   Left to the .btn defaults it came out 17px tall and colour-filled beside a 27px
-   outlined button, which is two systems in one row. */
+.steps-section-head .step-clear-btn {
+  flex: none;
+  min-height: 28px;
+  white-space: nowrap;
+}
+
 .step-batch-actions .btn {
-  width: auto;
+  width: 28px;
   flex: 0 0 auto;
-  min-height: 26px;
-  padding: 4px 10px;
+  min-height: 28px;
+  padding: 0;
   border-radius: var(--radius-md);
   font-size: 11px;
   box-shadow: none;
@@ -930,7 +1107,8 @@
 }
 
 .recording-name-field input,
-.recording-name-field select {
+.recording-name-field select,
+.recording-name-field textarea {
   width: 100%;
   height: 34px;
   padding: 6px 10px;
@@ -945,8 +1123,16 @@
   outline: none;
 }
 
+.recording-name-field textarea {
+  height: auto;
+  min-height: 86px;
+  max-height: 35vh;
+  resize: vertical;
+}
+
 .recording-name-field input:focus,
-.recording-name-field select:focus {
+.recording-name-field select:focus,
+.recording-name-field textarea:focus {
   border-color: var(--accent-color);
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
@@ -1099,7 +1285,7 @@
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   padding: 5px 8px; border-radius: var(--radius-sm); background: var(--accent-light); color: var(--accent-color); font-weight: 600;
 }
-.recording-recovery-item:enabled:is(:hover, :focus-visible) .recording-recovery-action { background: var(--accent-color); color: white; }
+.recording-recovery-item:enabled:is(:hover, :focus-visible) .recording-recovery-action { background: var(--accent-fill); color: white; }
 .recording-recovery-item:disabled { opacity: .6; cursor: wait; }
 .recording-recovery-item.is-recovering:disabled { opacity: 1; }
 .recording-recovery-item.is-recovering .recording-recovery-action::before {
@@ -1112,3 +1298,43 @@
 @media (max-width: 400px) {
   .recover-recordings-btn > svg { display: none; }
 }
+
+.recording-pages {
+  flex: none;
+  padding: 4px 2px 1px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+}
+.recording-pages summary { color: var(--text-primary); font-weight: 600; cursor: pointer; }
+.recording-pages summary .badge { margin-inline: 3px; }
+.recording-pages-status { color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.recording-pages-status[data-in-scope="true"] { color: var(--accent-color); }
+.recording-pages ul {
+  max-height: 108px;
+  margin: 6px 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.recording-pages li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-xs);
+}
+.recording-pages li[aria-current="true"] { background: var(--accent-light); }
+.recording-page-handle { flex: none; color: var(--accent-color); font-weight: 600; }
+.recording-page-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recording-pages form { margin-top: 6px; }
+.recording-pages form label { display: block; margin-bottom: 4px; color: var(--text-secondary); }
+.recording-pages select {
+  width: 100%;
+  min-width: 0;
+  padding: 5px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xs);
+}
+.recording-pages-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 5px; }

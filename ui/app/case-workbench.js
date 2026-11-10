@@ -293,10 +293,14 @@ if (!globalThis.RecorderCaseWorkbench) {
 
     function render() {
       const query = searchInput.value.trim().toLocaleLowerCase(localeTag());
+      const knownFolderIds = new Set(ctx.folders.map(folder => folder.id));
+      // Computed once per render rather than once per case: descendantIds is a
+      // fixpoint over the whole folder table.
+      const activeFolderIds = ctx.activeFolderId !== "unfiled" ? ctx.descendantIds(ctx.activeFolderId) : null;
+      const scopeIsAll = searchScope.value === "all";
       ctx.filteredCases = ctx.cases.filter(item => {
-        const hasKnownFolder = item.folderId && ctx.folders.some(folder => folder.id === item.folderId);
-        const activeFolderIds = ctx.activeFolderId !== "unfiled" ? ctx.descendantIds(ctx.activeFolderId) : null;
-        const inFolder = searchScope.value === "all"
+        const hasKnownFolder = item.folderId && knownFolderIds.has(item.folderId);
+        const inFolder = scopeIsAll
           || (ctx.activeFolderId === "unfiled" ? !hasKnownFolder : activeFolderIds.has(item.folderId));
         return inFolder && (!query || item.name.toLocaleLowerCase(localeTag()).includes(query));
       });
@@ -386,17 +390,27 @@ if (!globalThis.RecorderCaseWorkbench) {
       onCasesChanged(ctx.cases);
     }
     async function readSelectedCases(selectedIds = ctx.selectedIds) {
-      const details = [];
-      const failed = [];
-      for (const summary of ctx.cases.filter(item => selectedIds.has(item.id))) {
-        const response = await sendRuntimeMessage({ action: MESSAGE.getCaseDetails, caseId: summary.id }, 30000);
-        if (!response?.success) failed.push(summary.name);
-        else details.push(response.case);
-      }
+      // A small pool instead of one serial round trip per case; slots keep the
+      // results in the selection's own order.
+      const summaries = ctx.cases.filter(item => selectedIds.has(item.id));
+      const detailSlots = new Array(summaries.length);
+      const failedSlots = new Array(summaries.length);
+      let cursor = 0;
+      const readNext = async () => {
+        while (cursor < summaries.length) {
+          const index = cursor++;
+          const summary = summaries[index];
+          const response = await sendRuntimeMessage({ action: MESSAGE.getCaseDetails, caseId: summary.id }, 30000);
+          if (response?.success) detailSlots[index] = response.case;
+          else failedSlots[index] = summary.name;
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, summaries.length) }, readNext));
+      const failed = failedSlots.filter(Boolean);
       if (failed.length > 0) {
         reportError(t("exportCaseReadFailed", [failed.join("、")], `以下用例读取失败：${failed.join("、")}`));
       }
-      return details;
+      return detailSlots.filter(Boolean);
     }
 
     ctx.render = render;

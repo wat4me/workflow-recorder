@@ -102,13 +102,22 @@
     if (tagName === "TEXTAREA") return true;
     if (tagName !== "INPUT") return false;
     const type = (element.getAttribute("type") || "text").toLowerCase();
-    return ["text", "password", "email", "url", "tel", "number", "search"].includes(type);
+    // Date and time pickers commit through their value like a text field; their
+    // clicks produce no DOM evidence, so without this their whole interaction
+    // was invisible in the recording.
+    return ["text", "password", "email", "url", "tel", "number", "search",
+      "date", "time", "month", "week", "datetime-local"].includes(type);
   }
 
   function getEditableTarget(element) {
     if (!(element instanceof Element)) return null;
     if (isRecordableTextInput(element)) return element;
-    return element.closest('[contenteditable="true"], [contenteditable="plaintext-only"]');
+    // isContentEditable covers the bare `contenteditable` attribute and value
+    // case variants that an exact attribute selector misses.
+    for (let current = element; current instanceof Element && current !== document.documentElement; current = current.parentElement) {
+      if (current.isContentEditable) return current;
+    }
+    return null;
   }
 
   function getEditableValue(element) {

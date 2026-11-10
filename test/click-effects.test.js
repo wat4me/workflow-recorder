@@ -21,8 +21,13 @@ function harness() {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "content/click-effects.js"), "utf8"), context);
   const effects = context.RecorderClickEffects.create({ onFinish: observation => results.push({ id: observation.id, ...observation.result }) });
   function element(parentElement = body, attrs = {}, strong = false) {
-    return { nodeType: 1, tagName: "DIV", parentElement, attrs, strong, isConnected: true,
+    const listeners = new Map();
+    return { nodeType: 1, tagName: attrs.tagName || "DIV", parentElement, attrs, strong, isConnected: true,
+      checked: attrs.checked,
       getAttribute: name => attrs[name] ?? null,
+      addEventListener(name, handler) { listeners.set(name, handler); },
+      removeEventListener(name) { listeners.delete(name); },
+      fire(name) { listeners.get(name)?.({}); },
       contains(node) { for (let current = node; current; current = current.parentElement) if (current === this) return true; return false; } };
   }
   function attribute(node, name, value) {
@@ -102,4 +107,39 @@ test("responsive DOM rebuilding is rejected even before the resize listener runs
   const result = await h.effects.wait("responsive");
   assert.equal(result.changed, false);
   assert.equal(result.reason, "viewport-resize");
+});
+
+test("a checkbox toggle is evidence even though it creates no mutation record", async () => {
+  const h = harness();
+  const box = h.element(null, { tagName: "INPUT", type: "checkbox", checked: false });
+  h.effects.begin("check", box, 0);
+  box.checked = true;
+  box.fire("change");
+  const result = await h.effects.wait("check");
+  assert.equal(result.changed, true);
+  assert.equal(result.reason, "checked-changed");
+  assert.equal(result.interrupted, false);
+});
+
+test("an interrupted checkbox toggle is still judged by its state", async () => {
+  const h = harness();
+  const box = h.element(null, { tagName: "INPUT", type: "checkbox", checked: false });
+  h.effects.begin("check", box, 0);
+  box.checked = true;
+  h.tick(300);
+  h.effects.interrupt("next-interaction");
+  const result = await h.effects.wait("check");
+  assert.equal(result.changed, true);
+  assert.equal(result.reason, "checked-changed");
+});
+
+test("a label wrapping a checkbox resolves the control it toggles", async () => {
+  const h = harness();
+  const box = h.element(null, { tagName: "INPUT", type: "checkbox", checked: false });
+  const label = h.element(null, { tagName: "LABEL" });
+  label.control = box;
+  h.effects.begin("label", label, 0);
+  box.checked = true;
+  box.fire("change");
+  assert.equal((await h.effects.wait("label")).changed, true);
 });

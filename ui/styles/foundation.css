@@ -133,13 +133,6 @@ body {
   margin-top: 1px;
 }
 
-.header-actions {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 8px;
-}
-
 /* ── Icon Button ── */
 .icon-btn {
   display: inline-flex;
@@ -169,8 +162,8 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 8px 14px 6px;
+  padding: 5px 4px 0;
   overflow: hidden;
-  gap: 6px;
+  gap: 3px;
   position: relative;
 }

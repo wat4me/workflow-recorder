@@ -7,7 +7,9 @@
 步骤文档示例：
 
 ```text
-2. [page1] click <a id="sure"> -> link "确定"
+2. [page1] click DOM <a id="sure"> -> link "确定" (DOM sources: role=a[href], name=element text)
+   AXTree (browser-computed): {"role":"link","name":"确定","properties":{}}
+   User modified name: "确定" -> "确认审批" (user-provided alias, may differ from the actual page name).
 ```
 
 文档保留动作、页面句柄、元素开标签、ARIA 角色、可访问名称和必要的 DOM 上下文，不生成脆弱的 `nth-of-type` CSS 路径，也不直接生成自动化代码。
@@ -15,6 +17,7 @@
 ## 主要功能
 
 - 记录点击、文本输入、下拉选择、按键、悬停和拖拽操作。
+- 记录网页触发的浏览器原生 JavaScript 弹窗，例如 `alert`、`confirm` 和 `prompt`。步骤保留弹窗文本、确认或取消结果，以及已确认的 `prompt` 输入，可在文档和「复制给 AI」中查看。
 - 连续输入按控件防抖合并，停止输入约 `700ms` 或控件失焦后提交最终输入步骤。
 - 仅点击且内容未变的输入框不生成输入步骤；纯零宽空格等编辑器占位按空内容处理，真正清空已有内容仍会记录。正常文字中的零宽字符、普通输入框里的空格及 emoji 保持原样。
 - 自动跟踪录制页面递归打开的子标签页和独立窗口。
@@ -66,6 +69,8 @@
 ### 2. 操作页面
 
 侧边栏会实时展示录制步骤和截图，并自动滚动到最新内容。截图异步加载导致卡片高度变化后，也会再次滚动到底部。点击截图可在侧边栏内预览；预览标题过长时会显示省略号，悬停可查看完整描述，并可使用左右按钮或键盘方向键切换当前录制中的前后截图。侧边栏预览不显示“适应窗口”按钮，双击画布仍可适应窗口。
+
+录制时可展开「本次录制的页面」查看已纳入的标签页、`pageN` 句柄和当前页面的录制状态。网页打开的子窗口自动加入。要纳入手动打开或之前已打开的页面，在原录制侧边栏点「加入页面」，从已打开的窗口中选择。目标页面原有的草稿仍可恢复，加入后的新操作会写入当前录制。
 
 打开侧边栏时，仅向顶层页面加载布局脚本，宽页面会自动缩小以适应剩余空间；点击开始或继续录制后，才向页面及 iframe 加载完整录制脚本。页面缩放引起的尺寸变化、仅高度变化及重复打开通知不会反复恢复并重新缩放页面；窗口宽度变化或检测到新的横向溢出时才重新适配，关闭侧边栏会恢复原来的缩放。
 
@@ -299,7 +304,7 @@ Markdown 中的截图引用使用相对路径：
 ```markdown
 # Recorded Workflow
 
-Time: 2026-08-25 15:30 · Steps: 6 · Pages: 2
+Time: 2026-08-25 15:30 · Steps: 8 · Pages: 2
 
 [page1] https://example.com/login "Login"
      -> https://example.com/home "Home"
@@ -309,26 +314,35 @@ Time: 2026-08-25 15:30 · Steps: 6 · Pages: 2
 2. [page1] type <input id="username"> -> "alice"
 3. [page1] select <select id="role" name="role"> -> "Admin"
 4. [page1] press Enter on <input id="password" type="password">
-5. [page1] click <a id="sure"> -> link "Confirm"
+5. [page1] click DOM <a id="sure"> -> link "Confirm" (DOM sources: role=a[href], name=element text)
+   AXTree (browser-computed): {"role":"link","name":"Confirm","properties":{}}
+   User modified name: "Confirm" -> "Approve request" (user-provided alias, may differ from the actual page name).
    page url: https://example.com/home
-6. [page1] click <a id="report-link"> -> link "Report"
-   -> opens page2
-7. [page2] click <a id="print"> -> link "Print"
-8. [page1] click <button id="close-win"> -> button "Close"
+6. [page1] click DOM <a id="report-link"> -> link "Report" (DOM sources: role=a[href], name=element text)
+   AXTree (browser-computed): {"role":"link","name":"Report","properties":{}}
+   -> opens a new window as [page2]
+7. [page2] click DOM <a id="print"> -> link "Print" (DOM sources: role=a[href], name=element text)
+   AXTree (browser-computed): {"role":"link","name":"Print","properties":{}}
+   before this step: switch from [page1] to [page2]
+8. [page1] click DOM <button id="close-win"> -> button "Close" (DOM sources: role=HTML tag, name=element text)
+   AXTree (browser-computed): not recorded.
+   before this step: switch from [page2] to [page1]
    page closed after this step
 ```
 
 文档设计：
 
 - 元素使用精简的 DOM 开标签表示，保留 `id`、`name`、`type` 和有限的 class 信息。
+- 点击步骤分别列出 DOM 线索和浏览器计算的 AXTree。设置过自定义名称时，再列出原名称与新名称，并标明新名称是用户别名。
+- DOM 角色和名称会注明来源，例如 HTML 标签、`type`、`aria-label`、关联标签、`value` 或元素文本。旧录制缺少来源时标为 `not recorded`。
 - 优先使用 ARIA role、`aria-label`、关联 label 和可访问名称。
 - 分析器给不出可访问名称时回退到元素自身的可见文本。普通 `div` 不属于"可由内容命名"的角色，所以像 `<div class="navText">新建事项</div>` 这样的点击目标以前在文档里完全没有名字。回退沿用卡片标签原本的长度上限（不超过 32 字、不超过 3 个词），整段容器文本不会被当成控件名。
 - 只有在既没有可访问名称、也没有可用的自身文本时，才附加附近文本和最多五层 DOM 上下文。
 - 自动过滤 `style` 和 `on*` 事件属性。
 - 导出文档结构保持英文，但页面标题、控件名称和输入值保留原始语言。
 - 页面句柄绑定的是标签页而不是文档，所以同一标签页内的跳转不会产生新句柄。页头为此列出每个句柄**经过的全部 URL**，并在某个步骤的 URL 与上一步不同时补一行 `page url:`。登录跳转、应用重定向和单页路由跳转本身仍不生成步骤，但它们造成的坐标变化会如实出现在文档里。
-- 页面生命周期单独写出：`-> opens page2` 标注是哪一步打开了子页面、之后的操作落在哪个句柄上，`page closed after this step` 标注页面在哪里消失。这两件事光看步骤列表无法还原——一个中途出现的句柄会显得来路不明，一个因为窗口关闭而结束的流程会显得只是断掉了。
-- 打开子页面这件事记录在步骤自己的 `openedChildPage` 字段上，不复用截图跳过原因：后者属于截图流水线，会在整个录制未启用截图时被覆盖成 `capture-disabled`，也会在事后重拍成功时被清空。页面事实必须比截图活得久。
+- 打开子页面时，步骤注明新窗口或标签页的句柄。相邻步骤使用不同的句柄时，文档明确写出在哪一步之前切换页面。旧录制只有打开记录时，文档会注明目标句柄未记录。
+- `openedChildPage` 保留打开记录，`openedPageName` 和 `openedPageKind` 保存录制时匹配到的目标句柄和类型。
 
 ## 数据存储
 

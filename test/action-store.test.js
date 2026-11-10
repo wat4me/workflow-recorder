@@ -71,3 +71,14 @@ test("orphan cleanup enumerates keys without reading saved case payloads", async
   assert.ok(storage.data["action:live"]);
   assert.equal(storage.data["action:orphan"], undefined);
 });
+
+test("appendAction lands extra writes in the same storage commit as the step", async () => {
+  const storage = createStorage({ actionOrder: [] });
+  globalThis.chrome = { storage };
+  const actions = await import(`../background/store/actions.js?t=${Math.random()}`);
+  await actions.appendAction({ id: "s1", type: "click" }, { activeCaseId: null });
+  assert.deepEqual(storage.writes, [["activeCaseId", "action:s1", "actionOrder"]]);
+  assert.equal(storage.data["action:s1"].type, "click");
+  assert.equal(storage.data.actionOrder[0], "s1");
+  assert.equal(storage.data.activeCaseId, null);
+});

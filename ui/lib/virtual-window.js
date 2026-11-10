@@ -18,12 +18,19 @@ export function createVirtualWindow(gap = 6) {
     dirty = true;
     return true;
   }
-  function range(scrollTop, viewportHeight, overscan = 500) {
+  function updateOffsets() {
     if (dirty) {
       offsets = [0];
       for (const key of keys) offsets.push(offsets[offsets.length - 1] + (heights.get(key) || estimate) + gap);
       dirty = false;
     }
+  }
+  function offsetAt(index) {
+    updateOffsets();
+    return offsets[index];
+  }
+  function range(scrollTop, viewportHeight, overscan = 500) {
+    updateOffsets();
     function find(position) {
       let low = 0, high = keys.length;
       while (low < high) {
@@ -39,5 +46,5 @@ export function createVirtualWindow(gap = 6) {
       after: Math.max(0, offsets[keys.length] - offsets[end] - gap) };
   }
   function clear() { heights.clear(); reset([]); }
-  return { reset, measure, range, clear };
+  return { reset, measure, range, offsetAt, clear };
 }

@@ -12,6 +12,13 @@
   const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
   const DEFAULT_TIMEOUT_MS = 15000;
 
+  function messageError(error) {
+    if (/message (?:port|channel) closed before a response|receiving end does not exist/i.test(error)) {
+      return t("messageConnectionClosed", [], "扩展消息连接已中断。请等待页面加载完成后重试。");
+    }
+    return error;
+  }
+
   function sendRuntimeMessage(message, timeoutMs = DEFAULT_TIMEOUT_MS) {
     return new Promise(resolve => {
       let settled = false;
@@ -30,13 +37,17 @@
         chrome.runtime.sendMessage(message, response => {
           const error = chrome.runtime.lastError;
           if (error) {
-            finish({ success: false, error: error.message });
+            finish({ success: false, error: messageError(error.message) });
+            return;
+          }
+          if (response?.success === false && response.error) {
+            finish({ ...response, error: messageError(response.error) });
             return;
           }
           finish(response ?? { success: false, error: t("emptyMessageResponse", [], "插件未返回处理结果") });
         });
       } catch (error) {
-        finish({ success: false, error: error.message });
+        finish({ success: false, error: messageError(error.message) });
       }
     });
   }
@@ -47,7 +58,9 @@
    */
   async function readActions() {
     const response = await sendRuntimeMessage({ action: MESSAGE.getActions });
-    return response?.success ? response.actions || [] : [];
+    // Null rather than an empty list when the worker cannot be reached: a
+    // timeout must not read as "this workspace has no steps".
+    return response?.success ? response.actions || [] : null;
   }
 
   /** Screenshot blobs. Resolves null rather than throwing: a missing screenshot

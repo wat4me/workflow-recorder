@@ -51,7 +51,7 @@
 .selection-checkbox:checked,
 .selection-checkbox:indeterminate {
   border-color: var(--accent-color);
-  background: var(--accent-color);
+  background: var(--accent-fill);
 }
 
 .selection-checkbox:checked::before {

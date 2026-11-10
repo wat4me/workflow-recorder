@@ -1,6 +1,6 @@
 /** Fullscreen library for saved recordings and read-only step previews. */
-import { createConsoleImagePreview } from "./app/console-image-preview.js";
 import { createConsolePreview } from "./app/console-preview.js";
+import { bindThemeToggle } from "./lib/theme.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
 
@@ -8,8 +8,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   await window.RecorderI18n.ready;
   window.RecorderI18n.applyI18n();
   window.RecorderI18n.bindLanguageToggle(document.getElementById("language-btn"));
+  bindThemeToggle(document.getElementById("theme-toggle-btn"));
   const { t } = window.RecorderI18n;
-  const { getBlob, sendRuntimeMessage } = window.RecorderBridge;
+  const { sendRuntimeMessage } = window.RecorderBridge;
   const { notify, reportError } = window.RecorderDialogs;
 
   document.getElementById("capture-settings-btn").addEventListener("click", async () => {
@@ -42,7 +43,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     history.replaceState(null, "", url.href);
   }
 
-  const imagePreview = createConsoleImagePreview({ t, getBlob, sendRuntimeMessage, MESSAGE });
   preview = createConsolePreview({ t, sendRuntimeMessage, MESSAGE, notify, reportError, setView });
   const workbench = window.RecorderCaseWorkbench.create({
     list: document.getElementById("case-library-list"),
@@ -68,7 +68,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   window.addEventListener("unload", () => {
-    imagePreview.dispose();
     workbench.dispose();
     preview.previewStepView.dispose();
   });
@@ -76,13 +75,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   await workbench.refresh().catch(error => reportError(error.message));
   if (params.get("caseId")) {
     await preview.showCasePreview({ id: params.get("caseId") }).catch(error => reportError(error.message));
-  }
-  if (params.get("previewKey")) {
-    const previewKey = params.get("previewKey");
-    await imagePreview.loadPreviewSequence(previewKey);
-    await imagePreview.showConsoleImagePreview(
-      previewKey,
-      params.get("previewAlt") || t("stepScreenshots", [], "步骤截图")
-    );
   }
 });

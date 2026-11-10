@@ -80,7 +80,11 @@ export function createConsolePreview({ t, sendRuntimeMessage, MESSAGE, notify, r
     if (!decision) return false;
     if (decision.action === "save") {
       if (!decision.name) return false;
-      const saved = await sendRuntimeMessage({ action: MESSAGE.saveCase, name: decision.name });
+      // Match the side panel's guard: the save must land on the workspace the
+      // user is looking at, not on whichever draft is active if it changed.
+      const draftState = await sendRuntimeMessage({ action: MESSAGE.getDraftState });
+      const saved = await sendRuntimeMessage({ action: MESSAGE.saveCase, name: decision.name,
+        ...(draftState?.draftId ? { workspaceDraftId: draftState.draftId } : {}) });
       if (!saved?.success) throw new Error(saved?.error || t("saveCaseFailed", [], "保存用例失败"));
       return true;
     }

@@ -2,45 +2,70 @@ import "../../shared/screenshot-geometry.js";
 import { addTargetHighlight } from "../../background/capture/image-processing.js";
 
 const { mapHighlightRect } = globalThis.RecorderScreenshotGeometry;
-let thumbnailTail = Promise.resolve();
+const MAX_THUMBNAIL_JOBS = 2;
+let activeThumbnails = 0;
+const thumbnailWaiters = [];
 const pending = new Map();
 
-// Only one resize runs at a time. Finished thumbnails live on disk, not in a
+// Two resize jobs at a time, like the screenshot capture queue: one leaves the
+// main thread for the other, so a fast scroll no longer queues thumbnails up
+// behind each other one by one. Finished thumbnails live on disk, not in a
 // growing in-memory cache; the caller owns the short-lived Blob/object URL.
+function acquireThumbnailSlot() {
+  return new Promise(resolve => {
+    const grant = () => {
+      activeThumbnails++;
+      let released = false;
+      resolve(() => {
+        if (released) return;
+        released = true;
+        activeThumbnails--;
+        thumbnailWaiters.shift()?.();
+      });
+    };
+    if (activeThumbnails < MAX_THUMBNAIL_JOBS) grant();
+    else thumbnailWaiters.push(grant);
+  });
+}
+
 async function getThumbnail(key) {
   const store = globalThis.RecorderMediaStore;
   const cached = await store.getThumbnail(key);
   if (cached) return cached;
   if (pending.has(key)) return pending.get(key);
-  const task = thumbnailTail.then(async () => {
-    const cached = await store.getThumbnail(key);
-    if (cached) return cached;
-    const source = await store.getBlob(key);
-    if (!source) return null;
-    let bitmap;
-    let canvas;
+  const task = (async () => {
+    const release = await acquireThumbnailSlot();
     try {
-      bitmap = await createImageBitmap(source, { resizeWidth: 320, resizeQuality: "high" });
-      const scale = Math.min(1, 320 / bitmap.width, 320 / bitmap.height);
-      canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)),
-        Math.max(1, Math.round(bitmap.height * scale)));
-      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      const thumbnail = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
-      // Cleanup cannot delete the source between this check and publication.
-      await store.withWriteLock(async () => {
-        if (await store.getBlob(key)) await store.putThumbnail(key, thumbnail);
-      });
-      return thumbnail;
-    } catch (error) {
-      console.warn("[Thumbnails] Resize failed:", error.message);
-      return source;
+      const retried = await store.getThumbnail(key);
+      if (retried) return retried;
+      const source = await store.getBlob(key);
+      if (!source) return null;
+      let bitmap;
+      let canvas;
+      try {
+        bitmap = await createImageBitmap(source, { resizeWidth: 320, resizeQuality: "high" });
+        const scale = Math.min(1, 320 / bitmap.width, 320 / bitmap.height);
+        canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)),
+          Math.max(1, Math.round(bitmap.height * scale)));
+        canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const thumbnail = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
+        // Cleanup cannot delete the source between this check and publication.
+        await store.withWriteLock(async () => {
+          if (await store.getBlob(key)) await store.putThumbnail(key, thumbnail);
+        });
+        return thumbnail;
+      } catch (error) {
+        console.warn("[Thumbnails] Resize failed:", error.message);
+        return source;
+      } finally {
+        bitmap?.close();
+        if (canvas) canvas.width = canvas.height = 1;
+      }
     } finally {
-      bitmap?.close();
-      if (canvas) canvas.width = canvas.height = 1;
+      release();
     }
-  });
+  })();
   pending.set(key, task);
-  thumbnailTail = task.catch(() => {});
   try { return await task; }
   finally { if (pending.get(key) === task) pending.delete(key); }
 }

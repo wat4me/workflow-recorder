@@ -38,7 +38,7 @@ test("browser AX evidence is included in AI copy and documents separately from D
   for (const output of [generator.generate([action]), generator.generateTask("Case", [action])]) {
     assert.match(output, /发送/);
     assert.match(output, /dom context:/);
-    assert.match(output, /AX context \(browser-computed\).*Browser name/);
+    assert.match(output, /AXTree \(browser-computed\).*Browser name/);
     assert.match(output, /"disabled":false/);
   }
   action.accessibility = { status: "unavailable", reason: "timeout" };
@@ -50,6 +50,30 @@ test("browser AX evidence is included in AI copy and documents separately from D
   assert.match(ignored, /target is ignored.*use DOM context/);
   assert.match(ignored, /not the clicked node.*More/);
   assert.doesNotMatch(ignored, /"role":"none"/);
+});
+
+test("click exports keep DOM, AXTree and the user name change separate", () => {
+  const generator = loadGenerator();
+  const action = {
+    type: "click", url: "https://example.test/login",
+    target: fakeTarget({ tagName: "input", id: "login_button", className: "point", type: "button",
+      accessibleName: "登 录", roleSource: "input[type]", accessibleNameSource: "value" }),
+    accessibility: { status: "captured", role: "button", name: "登录" },
+    customTargetName: "测试按钮"
+  };
+  const lines = generator.generate([action]).split("\n");
+  const stepIndex = lines.findIndex(line => line.startsWith("1. "));
+  assert.deepEqual(lines.slice(stepIndex, stepIndex + 3), [
+    '1. [page1] click DOM <input id="login_button" class="point" type="button"> -> button "登 录" (DOM sources: role=input[type], name=value)',
+    '   AXTree (browser-computed): {"role":"button","name":"登录","properties":{}}',
+    '   User modified name: "登 录" -> "测试按钮" (user-provided alias, may differ from the actual page name).'
+  ]);
+  assert.equal(generator.describeStep(action).desc, "点击：测试按钮");
+  assert.match(generator.generateTask("Login", [{ type: "click", target: { tagName: "span" },
+    customTargetName: "打开筛选" }]), /AXTree \(browser-computed\): not recorded\.\n   User modified name: \(unnamed in DOM\) -> "打开筛选"/);
+  const legacy = generator.generate([{ type: "click", target: fakeTarget() }]);
+  assert.match(legacy, /DOM sources: role=not recorded, name=not recorded/);
+  assert.doesNotMatch(legacy, /User modified name/);
 });
 
 test("returns a friendly empty-state document", () => {
@@ -64,7 +88,7 @@ test("AI documents distinguish the original SVG hit from the interaction target"
   const doc = generator.generateTask("Branch selection", [{ type: "click", target: fakeTarget(),
     hitTarget: { tagName: "svg", className: "branch-icon", ancestorDistance: 1 }
   }]);
-  assert.match(doc, /click <button/);
+  assert.match(doc, /click DOM <button/);
   assert.match(doc, /recorded hit: <svg class="branch-icon">; interaction target is 1 level\(s\) above/);
   assert.doesNotMatch(generator.renderTag({ tagName: "svg", className: {} }), /object Object/);
   assert.match(generator.renderTag({ tagName: "svg", className: { baseVal: "legacy-icon" } }), /legacy-icon/);
@@ -128,7 +152,7 @@ test("generates English step lines for all core actions", () => {
   assert.match(doc, /Steps: 8 · Pages: 2/);
   assert.match(doc, /^\[page1\] https:\/\/example\.test\/login "Login"$/m);
   assert.match(doc, /1\. \[page1\] open https:\/\/example\.test\/login "Login"/);
-  assert.match(doc, /2\. \[page1\] click <a id="report"> -> link "Open report"/);
+  assert.match(doc, /2\. \[page1\] click DOM <a id="report"> -> link "Open report"/);
   assert.match(doc, /3\. \[page1\] type <input id="email" type="text"> -> "alice@example\.test"/);
   assert.match(doc, /4\. \[page1\] select <select id="role"> -> "Admin"/);
   assert.match(doc, /5\. \[page1\] press Enter on <input id="email" type="text">/);
@@ -179,12 +203,12 @@ test("renders a nested DOM skeleton of the 5-level ancestor chain", () => {
   ]);
 
   // Ancestors render outermost-first with increasing indentation under the step
-  assert.match(doc, /dom context:/);
-  assert.match(doc, /   <l1 class="level-1">/);
-  assert.match(doc, /     <l2 class="level-2">/);
-  assert.match(doc, /       <l3 class="level-3">/);
-  assert.match(doc, /         <l4 class="level-4">/);
-  assert.match(doc, /           <l5 class="level-5">/);
+  assert.match(doc, /dom context: 5 ancestor levels captured \(outermost first, \+1 = direct parent\)/);
+  assert.match(doc, /^   <l1 class="level-1">  <!-- ancestor \+5 -->$/m);
+  assert.match(doc, /^     <l2 class="level-2">  <!-- ancestor \+4 -->$/m);
+  assert.match(doc, /^       <l3 class="level-3">  <!-- ancestor \+3 -->$/m);
+  assert.match(doc, /^         <l4 class="level-4">  <!-- ancestor \+2 -->$/m);
+  assert.match(doc, /^           <l5 class="level-5">  <!-- ancestor \+1 -->$/m);
   // Target's own HTML is marked
   assert.match(doc, /button id="send-btn".*<!-- target -->/);
 });
@@ -199,7 +223,7 @@ test("annotates iframe steps in English", () => {
     }
   ]);
 
-  assert.match(doc, /click <button[^>]*> -> button "发送" in iframe\[name=layui-layer-iframe1\]/);
+  assert.match(doc, /click DOM <button[^>]*> -> button "发送" \(DOM sources: [^)]+\) in iframe\[name=layui-layer-iframe1\]/);
 });
 
 test("shows nearby text only when the element has no accessible name", () => {
@@ -255,8 +279,12 @@ test("describeStep exposes card fields for the UI", () => {
     target: fakeTarget()
   });
   assert.equal(step.desc, "点击：按钮“发送”");
-  assert.match(step.detail, /^click <button id="send-btn"/);
-  assert.ok(step.context.some(l => l === "dom context:"));
+  assert.match(step.detail, /^click DOM <button id="send-btn"/);
+  assert.ok(step.context.some(line => line.startsWith("dom context: 3 ancestor levels captured")));
+
+  const withoutAncestors = generator.describeStep({ type: "click", target: fakeTarget({ parentChain: null }) });
+  assert.ok(withoutAncestors.context.includes("dom context: 0 ancestor levels captured (target only)"));
+  assert.ok(withoutAncestors.context.some(line => line.endsWith("<!-- target -->")));
 
   const fallback = generator.describeStep({ type: "unknown-op" });
   assert.match(fallback.desc, /执行操作：unknown-op/);
@@ -344,28 +372,45 @@ test("steps without a recorded URL produce no location line", () => {
   assert.match(doc, /^\[page1\] $/m);
 });
 
-test("a click that opened a child page names the handle that follows", () => {
+test("each opening names the recorded window or tab even when their steps are used in reverse order", () => {
   const generator = loadGenerator();
   const doc = generator.generate([
     { type: "navigate", pageName: "page1", url: "https://erp.test/order", title: "Order" },
     { type: "click", pageName: "page1", url: "https://erp.test/order", openedChildPage: true,
-      screenshotSkippedReason: "opens-child-page", target: fakeTarget() },
-    { type: "click", pageName: "page2", url: "https://report.test/view", title: "Report", target: fakeTarget() }
+      openedPageName: "page2", openedPageKind: "window", target: fakeTarget() },
+    { type: "click", pageName: "page1", openedPageName: "page3", openedPageKind: "tab", target: fakeTarget() },
+    { type: "click", pageName: "page3", url: "https://report.test/second", target: fakeTarget() },
+    { type: "click", pageName: "page2", url: "https://report.test/first", target: fakeTarget() },
+    { type: "click", pageName: "page1", target: fakeTarget() }
   ]);
 
-  assert.ok(contextByStep(doc).get(2).includes("-> opens page2"));
-  // And that name is the handle the following steps are actually labelled with.
-  assert.match(doc, /^3\. \[page2\] /m);
+  const steps = contextByStep(doc);
+  assert.ok(steps.get(2).includes("-> opens a new window as [page2]"));
+  assert.ok(steps.get(3).includes("-> opens a new tab as [page3]"));
+  assert.ok(steps.get(4).includes("before this step: switch from [page1] to [page3]"));
+  assert.ok(steps.get(5).includes("before this step: switch from [page3] to [page2]"));
+  assert.ok(steps.get(6).includes("before this step: switch from [page2] to [page1]"));
 });
 
-test("a click that opened a page nobody used does not invent a handle", () => {
+test("legacy openings without a recorded handle do not borrow a later step's handle", () => {
   const generator = loadGenerator();
   const doc = generator.generate([
-    { type: "click", pageName: "page1", url: "https://erp.test/order", openedChildPage: true, target: fakeTarget() }
+    { type: "click", pageName: "page1", url: "https://erp.test/order", openedChildPage: true, target: fakeTarget() },
+    { type: "click", pageName: "page2", target: fakeTarget() }
   ]);
 
-  assert.ok(contextByStep(doc).get(1).includes("-> opens a new page"));
-  assert.doesNotMatch(doc, /-> opens page\d/);
+  assert.ok(contextByStep(doc).get(1).includes("-> opens a new page (destination handle not recorded)"));
+  assert.doesNotMatch(doc, /-> opens.*\[page2\]/);
+});
+
+test("a recorded opening with no subsequent steps still lists the child handle and URL", () => {
+  const doc = loadGenerator().generate([{
+    type: "click", pageName: "page1", target: fakeTarget(), openedPageName: "page2", openedPageKind: "window",
+    openedPageUrl: "https://report.test/view"
+  }]);
+  assert.match(doc, /^\[page2\] https:\/\/report\.test\/view$/m);
+  assert.match(doc, /-> opens a new window as \[page2\]/);
+  assert.doesNotMatch(doc, /before this step: switch/);
 });
 
 test("a step whose page was closed says the flow ended there", () => {
@@ -406,7 +451,7 @@ test("an element the analyzer left nameless is still named by its own text", () 
     }
   ]);
 
-  assert.match(doc, /click <div class="navText"> -> "新建事项"/);
+  assert.match(doc, /click DOM <div class="navText"> -> "新建事项" \(DOM sources: name=element text\)/);
   // With a name of its own, the sibling text is no longer a substitute for one.
   assert.doesNotMatch(doc, /nearby text/);
 });

@@ -170,8 +170,9 @@ export function attachStepMedia(ctx) {
     // With every step in the list skipped for the same reason, the note above the
     // list already says it: repeating it on each card is noise, not information.
     // The suppression rides along with the reason so flipping it repaints the tag.
-    const suppressed = captureState === "skipped" && stepsContainer.classList.contains("screenshots-disabled");
-    const reason = failure || (suppressed ? "capture-disabled" : "");
+    const suppressed = (readOnly === false && captureState === "captured")
+      || (captureState === "skipped" && stepsContainer.classList.contains("screenshots-disabled"));
+    const reason = failure || (suppressed ? "suppressed" : "");
     if (entry.captureState === captureState && entry.captureReason === reason) return;
     entry.captureState = captureState;
     entry.captureReason = reason;
@@ -192,9 +193,12 @@ export function attachStepMedia(ctx) {
       const count = Number(!!beforeKey) + Number(!!action.screenshotKey);
       entry.mediaToggle.hidden = count === 0;
       entry.mediaToggle.setAttribute("aria-expanded", String(expanded));
-      entry.mediaToggle.textContent = expanded
+      const label = expanded
         ? t("collapseStepScreenshots", [count], `收起截图（${count}）`)
         : t("expandStepScreenshots", [count], `展开截图（${count}）`);
+      entry.mediaToggle.title = label;
+      entry.mediaToggle.setAttribute("aria-label", label);
+      entry.mediaToggleCount.textContent = String(count);
     }
     entry.mediaRow.hidden = !expanded;
     if (!expanded) {

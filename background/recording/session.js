@@ -13,7 +13,7 @@ import "../../shared/protocol.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
 
-export function createRecordingSession({ t, scope, cases, screencast, screenshots, drainActions }) {
+export function createRecordingSession({ t, scope, cases, screencast, screenshots, drainActions, nativeDialogs }) {
   async function start(requestingTab, requestedRootTabId, recordingMode) {
     const initialTab = await scope.resolveInitialTab(requestedRootTabId, requestingTab);
     if (!initialTab) {
@@ -125,14 +125,17 @@ export function createRecordingSession({ t, scope, cases, screencast, screenshot
       // A tab-wide send resolves with just one reply and can miss an iframe.
       await Promise.all(recordingTabIds.map(async tabId => {
         const id = Number(tabId);
-        let frames = null;
-        try { frames = await chrome.webNavigation?.getAllFrames({ tabId: id }); } catch { /* Tab closed. */ }
-        if (Array.isArray(frames) && frames.length) {
-          await Promise.all(frames.map(frame => chrome.tabs.sendMessage(id,
-            { action: MESSAGE.stopRecording }, { frameId: frame.frameId }).catch(() => {})));
-        } else {
-          await chrome.tabs.sendMessage(id, { action: MESSAGE.stopRecording }).catch(() => {});
-        }
+        const stopPage = async () => {
+          let frames = null;
+          try { frames = await chrome.webNavigation?.getAllFrames({ tabId: id }); } catch { /* Tab closed. */ }
+          if (Array.isArray(frames) && frames.length) {
+            await Promise.all(frames.map(frame => chrome.tabs.sendMessage(id,
+              { action: MESSAGE.stopRecording }, { frameId: frame.frameId }).catch(() => {})));
+          } else {
+            await chrome.tabs.sendMessage(id, { action: MESSAGE.stopRecording }).catch(() => {});
+          }
+        };
+        await (nativeDialogs ? nativeDialogs.stopUntilDialogOpens(id, stopPage) : stopPage());
       }));
       mark("pagesStoppedMs");
       await drainActions();
@@ -153,6 +156,7 @@ export function createRecordingSession({ t, scope, cases, screencast, screenshot
           try { chrome.runtime.getPlatformInfo().catch(() => {}); } catch { /* Extension shutting down. */ }
         }, 20000) : null;
         try {
+          if (nativeDialogs) await drainActions();
           // Still part of this request and the recording-transition queue: a
           // draft switch/new start cannot overtake these writes after detach.
           await screenshots.flush();

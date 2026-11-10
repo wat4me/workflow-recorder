@@ -26,6 +26,7 @@
             <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>
           </svg>
         </button>
+        <button class="icon-btn" id="theme-toggle-btn" type="button" title="切换到深色模式" aria-label="切换到深色模式"></button>
         <button class="icon-btn language-btn" id="language-btn" type="button" title="切换到英文" aria-label="切换到英文">EN</button>
       </div>
     </header>
@@ -114,21 +115,6 @@
       </section>
     </main>
 
-    <div class="console-image-preview" id="console-image-preview" hidden>
-      <div class="console-preview-toolbar">
-        <div class="console-preview-title"><strong id="console-preview-title" data-i18n="screenshotPreview">截图预览</strong><span data-i18n="previewHint">←/→ 切换，滚轮缩放，按住拖动</span></div>
-        <div class="console-preview-actions">
-          <button type="button" id="console-prev-image" title="上一张" data-i18n-title="previousScreenshot">←</button>
-          <button type="button" id="console-next-image" title="下一张" data-i18n-title="nextScreenshot">→</button>
-          <button type="button" id="console-zoom-out" title="缩小" data-i18n-title="zoomOut">−</button>
-          <button type="button" id="console-zoom-label" title="点击恢复 100%" data-i18n-title="resetZoom">100%</button>
-          <button type="button" id="console-zoom-in" title="放大" data-i18n-title="zoomIn">+</button>
-          <button type="button" id="console-fit-image" data-i18n="fitWindow">适应窗口</button>
-          <button type="button" id="console-close-preview" data-i18n="close">关闭</button>
-        </div>
-      </div>
-      <div class="console-preview-stage" id="console-preview-stage"><div class="console-preview-loading" id="console-preview-loading" data-i18n="loadingScreenshot">正在读取截图…</div><img id="console-preview-image" alt="" draggable="false"></div>
-    </div>
   </div>
 
   <div class="target-tab-modal" id="target-tab-modal" hidden>

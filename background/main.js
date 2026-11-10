@@ -28,6 +28,7 @@ import { createAccessibilityCollector } from "./capture/accessibility.js";
 import { createScreenshotManager } from "./capture/screenshots.js";
 
 import { createActionLog } from "./recording/action-log.js";
+import { createNativeDialogRecorder } from "./recording/native-dialogs.js";
 import { injectRecordingScripts, injectRecordingScriptsIntoFrame } from "./recording/injection.js";
 import { createRecordingScope } from "./recording/scope.js";
 import { createRecordingSession } from "./recording/session.js";
@@ -98,6 +99,7 @@ const scope = createRecordingScope({ screencast });
 const accessibility = createAccessibilityCollector({ screencast, scope });
 
 const actionLog = createActionLog({ t, scope, screenshots, mediaCleanup, notifyStepsUpdated });
+const nativeDialogs = createNativeDialogRecorder({ screencast, scope, queueAction, actionLog, notifyStepsUpdated });
 
 const session = createRecordingSession({
   t,
@@ -105,6 +107,7 @@ const session = createRecordingSession({
   cases,
   screencast,
   screenshots,
+  nativeDialogs,
   drainActions: () => queueAction.drain()
 });
 
@@ -171,6 +174,8 @@ registerMessageRouter(createApplicationRoutes({
   notifyStepsUpdated,
   queueAction,
   queueRecordingTransition,
+  queueTabRegistration,
+  scope,
   screenshots,
   session,
   sidePanel,

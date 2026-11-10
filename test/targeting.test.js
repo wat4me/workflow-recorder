@@ -62,3 +62,25 @@ test("unannotated custom controls are candidates even without pointer or inline 
   assert.equal(targeting.isMeaningfulClickTarget(body.parentElement), false);
   assert.equal(targeting.isMeaningfulClickTarget(null), false);
 });
+
+test("bare and case-variant contenteditable hosts are recognized as editors", () => {
+  const { Element, body, targeting } = harness();
+  const bare = new Element("div", body, { contenteditable: "" });
+  bare.isContentEditable = true;
+  const inner = new Element("span", bare);
+  assert.equal(targeting.getEditableTarget(inner), bare);
+  const upper = new Element("div", body, { contenteditable: "TRUE" });
+  upper.isContentEditable = true;
+  assert.equal(targeting.getEditableTarget(upper), upper);
+  assert.equal(targeting.getEditableTarget(new Element("span", body)), null);
+});
+
+test("date and time inputs are recordable while checkbox, radio, range and file are not", () => {
+  const { Element, body, targeting } = harness();
+  for (const type of ["date", "time", "month", "week", "datetime-local", "number", "text"]) {
+    assert.equal(targeting.getEditableTarget(new Element("input", body, { type })).attrs.type, type);
+  }
+  for (const type of ["checkbox", "radio", "range", "file"]) {
+    assert.equal(targeting.getEditableTarget(new Element("input", body, { type })), null);
+  }
+});

@@ -21,8 +21,14 @@
     );
   }
 
+  // One connection per context. Opening and closing per operation made every
+  // screenshot write and thumbnail read pay an open/close round trip, and a
+  // single thumbnail generation opens the database four times.
+  let connection = null;
+
   function open() {
-    return new Promise((resolve, reject) => {
+    if (connection) return connection;
+    connection = new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, 2);
       request.onupgradeneeded = event => {
         const db = event.target.result;
@@ -31,52 +37,47 @@
       };
       request.onsuccess = event => {
         const db = event.target.result;
-        db.onversionchange = () => db.close();
+        // A later version change, including a deleteDatabase from a test or a
+        // downgrade, closes this connection; the next operation reopens.
+        db.onversionchange = () => {
+          db.close();
+          if (connection) connection = null;
+        };
         resolve(db);
       };
       request.onerror = event => reject(event.target.error);
     });
+    connection.catch(() => { connection = null; });
+    return connection;
   }
 
   async function getBlob(key, store = STORE_NAME) {
     const db = await open();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(store, "readonly").objectStore(store).get(key);
-        request.onsuccess = event => resolve(event.target.result || null);
-        request.onerror = event => reject(event.target.error);
-      });
-    } finally {
-      db.close();
-    }
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(store, "readonly").objectStore(store).get(key);
+      request.onsuccess = event => resolve(event.target.result || null);
+      request.onerror = event => reject(event.target.error);
+    });
   }
 
   async function putBlob(key, blob, store = STORE_NAME) {
     const db = await open();
-    try {
-      await new Promise((resolve, reject) => {
-        const transaction = db.transaction(store, "readwrite");
-        transaction.oncomplete = resolve;
-        transaction.onerror = event => reject(event.target.error);
-        transaction.onabort = () => reject(transaction.error || new Error("IndexedDB transaction aborted"));
-        transaction.objectStore(store).put(blob, key);
-      });
-    } finally {
-      db.close();
-    }
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(store, "readwrite");
+      transaction.oncomplete = resolve;
+      transaction.onerror = event => reject(event.target.error);
+      transaction.onabort = () => reject(transaction.error || new Error("IndexedDB transaction aborted"));
+      transaction.objectStore(store).put(blob, key);
+    });
   }
 
   async function getAllKeys() {
     const db = await open();
-    try {
-      return await new Promise((resolve, reject) => {
-        const request = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAllKeys();
-        request.onsuccess = event => resolve(event.target.result || []);
-        request.onerror = event => reject(event.target.error);
-      });
-    } finally {
-      db.close();
-    }
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAllKeys();
+      request.onsuccess = event => resolve(event.target.result || []);
+      request.onerror = event => reject(event.target.error);
+    });
   }
 
   async function deleteBlob(key) {
@@ -88,19 +89,15 @@
     const uniqueKeys = [...new Set((keys || []).filter(Boolean))];
     if (uniqueKeys.length === 0) return;
     const db = await open();
-    try {
-      await new Promise((resolve, reject) => {
-        const transaction = db.transaction([STORE_NAME, THUMBNAIL_STORE], "readwrite");
-        const store = transaction.objectStore(STORE_NAME);
-        const thumbnails = transaction.objectStore(THUMBNAIL_STORE);
-        uniqueKeys.forEach(key => { store.delete(key); thumbnails.delete(key); });
-        transaction.oncomplete = resolve;
-        transaction.onerror = event => reject(event.target.error);
-        transaction.onabort = event => reject(event.target.error || new Error("IndexedDB transaction aborted"));
-      });
-    } finally {
-      db.close();
-    }
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction([STORE_NAME, THUMBNAIL_STORE], "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      const thumbnails = transaction.objectStore(THUMBNAIL_STORE);
+      uniqueKeys.forEach(key => { store.delete(key); thumbnails.delete(key); });
+      transaction.oncomplete = resolve;
+      transaction.onerror = event => reject(event.target.error);
+      transaction.onabort = event => reject(event.target.error || new Error("IndexedDB transaction aborted"));
+    });
   }
 
   globalThis.RecorderMediaStore = {

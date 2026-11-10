@@ -14,13 +14,15 @@ if (!window.RecorderStepView) {
     const { t } = globalThis.RecorderI18n;
     const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
     const { getBlob, sendRuntimeMessage } = globalThis.RecorderBridge;
-    const { confirmAction, notify, reportError } = globalThis.RecorderDialogs;
+    const { confirmAction, notify, promptText, reportError } = globalThis.RecorderDialogs;
     const { openImagePreview } = globalThis.RecorderImagePreview;
     const objectUrls = new Set();
     const cardEntries = new Map();
     const pendingLoads = new WeakMap();
     const mediaUrls = new WeakMap();
     const selectedActionIds = new Set();
+    const pageSelections = new Map();
+    const collapsedSegments = new Set();
     let workspaceContext = {};
     const expansionOverrides = new Map();
     const viewId = ++viewSequence;
@@ -46,7 +48,8 @@ if (!window.RecorderStepView) {
     // Causes for a deliberate skip. They are not error codes, so they have no
     // entry in CAPTURE_REASON_LABELS above.
     const SKIPPED_REASON_LABELS = {
-      "opens-child-page": () => t("captureReasonOpensChildPage", [], "点击打开了新页面")
+      "opens-child-page": () => t("captureReasonOpensChildPage", [], "点击打开了新页面"),
+      "browser-dialog": () => t("captureReasonBrowserDialog", [], "网页截图不包含浏览器原生弹窗")
     };
     // The saved-case preview mounts this view too and never records, so the panel
     // has to say when it is recording: only then is the newest step the one the
@@ -54,9 +57,12 @@ if (!window.RecorderStepView) {
     let recording = false;
     let firstRender = true;
     let currentActions = [];
+    let pageSegments = [];
+    let visibleIndices = [];
     let currentCapture = {};
     let windowFrame = 0;
-    const virtualWindow = createVirtualWindow();
+    stepsContainer.classList.toggle("steps-compact", !readOnly);
+    const virtualWindow = createVirtualWindow(readOnly ? 6 : 0);
     const topSpacer = document.createElement("div");
     const bottomSpacer = document.createElement("div");
     topSpacer.className = bottomSpacer.className = "step-virtual-spacer";
@@ -75,16 +81,16 @@ if (!window.RecorderStepView) {
           if (width !== containerWidth) {
             containerWidth = width;
             virtualWindow.clear();
-            virtualWindow.reset(currentActions.map(actionKey));
+            resetStepWindow();
             changed = true;
           }
         } else if (item.target.dataset.virtualKey) {
           changed = virtualWindow.measure(item.target.dataset.virtualKey, item.target.getBoundingClientRect().height) || changed;
         }
       }
-      if (changed && currentActions.length > 200) scheduleWindow();
+      if (changed && visibleIndices.length > 200) scheduleWindow();
     });
-    stepsContainer.addEventListener("scroll", () => { if (currentActions.length > 200) scheduleWindow(); }, { passive: true });
+    stepsContainer.addEventListener("scroll", () => { if (visibleIndices.length > 200) scheduleWindow(); }, { passive: true });
     function scrollToLatest() {
       requestAnimationFrame(() => { stepsContainer.scrollTop = stepsContainer.scrollHeight; });
     }
@@ -105,7 +111,8 @@ if (!window.RecorderStepView) {
       t, getBlob, openImagePreview, stepsContainer, readOnly, objectUrls, pendingLoads, mediaUrls,
       CAPTURE_LABELS, CAPTURE_REASON_LABELS, SKIPPED_REASON_LABELS,
       observer: null, describeStep, scrollToLatest,
-      isMediaExpanded: (action, index) => readOnly || (expansionOverrides.get(actionKey(action, index)) ?? screenshotsExpandedDefault)
+      isMediaExpanded: (action, index) => readOnly || (!isSegmentCollapsed(index)
+        && (expansionOverrides.get(actionKey(action, index)) ?? screenshotsExpandedDefault))
     };
     attachStepMedia(ctx);
     function setScreenshotsExpandedDefault(value) {
@@ -113,7 +120,7 @@ if (!window.RecorderStepView) {
       screenshotsExpandedDefault = !!value;
       expansionOverrides.clear();
       virtualWindow.clear();
-      virtualWindow.reset(currentActions.map(actionKey), screenshotsExpandedDefault ? 130 : 85);
+      resetStepWindow();
       renderWindow();
     }
     ctx.mediaSequence = () => currentActions.flatMap((action, index) => [
@@ -124,6 +131,38 @@ if (!window.RecorderStepView) {
     // The "this recording has no screenshots" note, kept so a re-render updates it
     // instead of stacking another one.
     let screenshotsDisabledNote = null;
+    async function renameClickTarget(action) {
+      const context = { ...workspaceContext };
+      const name = await promptText({
+        title: t("renameClickTarget", [], "设置点击目标名称"),
+        label: t("clickTargetName", [], "自定义名称"),
+        message: t("clickTargetNameHint", [], "名称会显示在此步骤和导出的文档中。留空可恢复自动识别的名称。"),
+        value: action.customTargetName || "",
+        confirmText: t("save", [], "保存")
+      });
+      if (name === null) return;
+      const response = await sendRuntimeMessage({ action: MESSAGE.renameClickTarget, actionId: action.id, name, ...context });
+      if (!response?.success) throw new Error(response?.error || t("clickTargetNameSaveFailed", [], "保存目标名称失败"));
+      onChanged();
+    }
+
+    async function editInputValue(action) {
+      const context = { ...workspaceContext };
+      const value = await promptText({
+        title: t("editInputValue", [], "编辑输入值"),
+        label: t("inputValue", [], "输入值"),
+        message: t("editInputValueHint", [], "保存后的值会用于步骤列表和导出。留空表示清空输入。"),
+        value: action.value ?? "",
+        multiline: true,
+        maxLength: null,
+        confirmText: t("save", [], "保存")
+      });
+      if (value === null) return;
+      const response = await sendRuntimeMessage({ action: MESSAGE.editInputValue, actionId: action.id, value, ...context });
+      if (!response?.success) throw new Error(response?.error || t("editInputValueFailed", [], "保存输入值失败"));
+      onChanged();
+    }
+
     async function deleteStep(index) {
       const context = { ...workspaceContext };
       const confirmed = await confirmAction({
@@ -137,25 +176,54 @@ if (!window.RecorderStepView) {
       if (response.cleanupPending) notify(t("screenshotCleanupDeferred", [], "步骤已删除，截图将在后台重试清理"));
       onChanged();
     }
-    function updateSelection(actions = []) {
-      if (readOnly || !selectAllSteps || !deleteSelectedStepsBtn) return;
-      const actionIds = actions.map(action => action.id).filter(Boolean);
-      const selectedCount = actionIds.filter(id => selectedActionIds.has(id)).length;
-      selectAllSteps.checked = actionIds.length > 0 && selectedCount === actionIds.length;
-      selectAllSteps.indeterminate = selectedCount > 0 && selectedCount < actionIds.length;
-      selectAllSteps.disabled = actionIds.length === 0;
+    function syncSelection(entry) {
+      if (!entry.checkbox) return;
+      entry.checkbox.checked = selectedActionIds.has(entry.actionId);
+      entry.card.classList.toggle("is-selected", entry.checkbox.checked);
+      if (entry.pageHeading.hidden) return;
+      const { ids, selectedCount } = pageSelections.get(entry.pageName.textContent);
+      entry.pageCheckbox.hidden = pageSelections.size < 2;
+      entry.pageCheckbox.disabled = ids.length === 0;
+      entry.pageCheckbox.checked = ids.length > 0 && selectedCount === ids.length;
+      entry.pageCheckbox.indeterminate = selectedCount > 0 && selectedCount < ids.length;
+    }
+    function updateSelection() {
+      if (readOnly) return;
+      pageSelections.clear();
+      let total = 0;
+      let selectedCount = 0;
+      for (const action of currentActions) {
+        const name = stepPage(action);
+        if (!pageSelections.has(name)) pageSelections.set(name, { ids: [], selectedCount: 0 });
+        if (!action.id) continue;
+        const page = pageSelections.get(name);
+        page.ids.push(action.id);
+        total++;
+        if (selectedActionIds.has(action.id)) {
+          page.selectedCount++;
+          selectedCount++;
+        }
+      }
+      if (!selectAllSteps || !deleteSelectedStepsBtn) return;
+      selectAllSteps.checked = total > 0 && selectedCount === total;
+      selectAllSteps.indeterminate = selectedCount > 0 && selectedCount < total;
+      selectAllSteps.disabled = total === 0;
       deleteSelectedStepsBtn.disabled = selectedActionIds.size === 0;
       // The count badge doubles as the selection readout, so no separate label has
       // to share the row: "3/5" says both how many are picked and how many exist.
       if (stepCountBadge) {
-        stepCountBadge.textContent = selectedCount > 0 ? `${selectedCount}/${actionIds.length}` : String(actionIds.length);
+        stepCountBadge.textContent = selectedCount > 0 ? `${selectedCount}/${total}` : String(total);
       }
       // The section head carries the selection state, so the batch action only takes
       // up room while it applies and the select-all control only appears once there
       // is something to select.
       const head = selectAllSteps.closest(".steps-section-head");
       head?.classList.toggle("is-selecting", selectedCount > 0);
-      head?.classList.toggle("is-empty", actionIds.length === 0);
+      head?.classList.toggle("is-empty", total === 0);
+    }
+    function refreshSelection() {
+      updateSelection();
+      for (const entry of cardEntries.values()) syncSelection(entry);
     }
     async function deleteSelectedSteps() {
       const context = { ...workspaceContext };
@@ -175,6 +243,55 @@ if (!window.RecorderStepView) {
       onChanged();
     }
     function actionKey(action, index) { return action.id ? `id:${action.id}` : `index:${index}`; }
+    function stepPage(action) { return action.pageName || "page1"; }
+    function updatePageSegments() {
+      if (readOnly) return;
+      const live = new Set();
+      let segment;
+      pageSegments = currentActions.map((action, index) => {
+        const page = stepPage(action);
+        if (segment?.page !== page) {
+          const key = JSON.stringify([page, actionKey(action, index)]);
+          segment = { key, page, start: index, count: 0 };
+          live.add(key);
+        }
+        segment.count++;
+        return segment;
+      });
+      for (const key of collapsedSegments) if (!live.has(key)) collapsedSegments.delete(key);
+    }
+    function isSegmentCollapsed(index) {
+      return collapsedSegments.has(pageSegments[index]?.key);
+    }
+    function windowKey(action, index) {
+      const key = actionKey(action, index);
+      return isSegmentCollapsed(index) ? `collapsed:${key}` : key;
+    }
+    function resetStepWindow() {
+      visibleIndices = [];
+      const keys = [];
+      currentActions.forEach((action, index) => {
+        if (isSegmentCollapsed(index) && pageSegments[index].start !== index) return;
+        visibleIndices.push(index);
+        keys.push(windowKey(action, index));
+      });
+      const compact = stepsContainer.classList.contains("screenshots-disabled") || !screenshotsExpandedDefault;
+      virtualWindow.reset(keys, readOnly ? 130 : compact ? 40 : 120);
+    }
+    function togglePageSegment(entry) {
+      const { key } = pageSegments[entry.index];
+      const top = entry.card.getBoundingClientRect().top;
+      const offset = top - stepsContainer.getBoundingClientRect().top;
+      if (collapsedSegments.has(key)) collapsedSegments.delete(key);
+      else collapsedSegments.add(key);
+      resetStepWindow();
+      // Keep the activated heading in view when the scroll range changes.
+      const position = visibleIndices.indexOf(entry.index);
+      const scrollTop = virtualWindow.offsetAt(position) + noteHeight() - offset;
+      renderWindow(scrollTop);
+      if (visibleIndices.length > 200) stepsContainer.scrollTop = scrollTop;
+      stepsContainer.scrollTop += entry.card.getBoundingClientRect().top - top;
+    }
     // The checkbox has no visible label, so it carries its name twice: aria-label for
     // assistive tech, and title so it shows the same hint as every other per-card
     // control on hover.
@@ -186,9 +303,74 @@ if (!window.RecorderStepView) {
     function textSignature(action, desc) {
       return [action.type || "", action.pageName || "", desc].join("\u0001");
     }
+    function syncStepText(entry, action) {
+      const { desc, summary } = describeStep(action);
+      const signature = textSignature(action, desc);
+      if (entry.signature === signature) return;
+      entry.typeBadge.className = `step-type-badge ${String(action.type || "unknown").toLowerCase()}`;
+      entry.typeBadge.textContent = window.StepDocGenerator
+        ? window.StepDocGenerator.getActionLabel(action.type)
+        : t("actionGeneric", [], "操作");
+      if (entry.pageTag) entry.pageTag.textContent = action.pageName || "page1";
+      entry.description.textContent = !readOnly && summary ? summary : desc;
+      entry.description.title = desc;
+      entry.signature = signature;
+    }
+    function syncPageHeading(entry, index) {
+      if (!entry?.pageHeading) return;
+      const action = currentActions[index];
+      const page = stepPage(action);
+      const pageNumber = Number(/^page(\d+)$/.exec(page)?.[1]) || 1;
+      entry.card.dataset.pageTone = (pageNumber - 1) % 4;
+      const { start, count } = pageSegments[index];
+      const collapsed = isSegmentCollapsed(index);
+      entry.card.classList.toggle("is-page-collapsed", collapsed);
+      entry.pageHeading.hidden = index !== start;
+      if (entry.pageHeading.hidden) return;
+      const toggleLabel = collapsed
+        ? t("expandPageSteps", [page, count], `展开 ${page}（${count} 步）`)
+        : t("collapsePageSteps", [page, count], `折叠 ${page}（${count} 步）`);
+      entry.pageToggle.setAttribute("aria-expanded", String(!collapsed));
+      entry.pageToggle.setAttribute("aria-label", toggleLabel);
+      entry.pageToggle.title = toggleLabel;
+      entry.pageCount.textContent = String(count);
+      const title = action.title || "";
+      if (entry.pageName.textContent === page && entry.pageTitle.textContent === title) return;
+      entry.pageName.textContent = page;
+      entry.pageTitle.textContent = title;
+      entry.pageTitle.hidden = !title;
+      entry.pageHeading.title = title ? `${page} · ${title}` : page;
+      const label = t("selectPageSteps", [page], `选择 ${page} 的所有步骤`);
+      entry.pageCheckbox.setAttribute("aria-label", label);
+      entry.pageCheckbox.title = label;
+    }
     function createCard(action, index) {
       const card = document.createElement("div");
       card.className = "step-card";
+      const pageHeading = readOnly ? null : document.createElement("div");
+      const pageCheckbox = pageHeading ? document.createElement("input") : null;
+      const pageToggle = pageHeading ? document.createElement("button") : null;
+      const pageCount = pageHeading ? document.createElement("span") : null;
+      const pageName = pageHeading ? document.createElement("span") : null;
+      const pageTitle = pageHeading ? document.createElement("span") : null;
+      if (pageHeading) {
+        pageHeading.className = "step-page-heading";
+        const pageLabel = document.createElement("div");
+        pageLabel.className = "step-page-label";
+        pageLabel.setAttribute("role", "heading");
+        pageLabel.setAttribute("aria-level", "3");
+        pageCheckbox.type = "checkbox";
+        pageCheckbox.className = "selection-checkbox step-page-checkbox";
+        pageName.className = "step-page-name";
+        pageTitle.className = "step-page-title";
+        pageLabel.append(pageName, pageTitle);
+        pageToggle.type = "button";
+        pageToggle.className = "step-page-toggle";
+        pageToggle.innerHTML = iconSvg("chevronRight", 14);
+        pageToggle.prepend(pageCount);
+        pageHeading.append(pageCheckbox, pageLabel, pageToggle);
+        card.append(pageHeading);
+      }
       const checkbox = readOnly ? null : document.createElement("input");
       if (checkbox) {
         card.classList.add("has-selection");
@@ -205,12 +387,15 @@ if (!window.RecorderStepView) {
       const meta = document.createElement("div");
       meta.className = "step-meta";
       const typeBadge = document.createElement("span");
-      const pageTag = document.createElement("span");
-      pageTag.className = "step-page-tag";
+      const pageTag = readOnly ? document.createElement("span") : null;
       const statusTag = document.createElement("span");
       statusTag.className = "step-status-tag";
       statusTag.hidden = true;
-      meta.append(typeBadge, pageTag, statusTag);
+      meta.append(typeBadge);
+      if (pageTag) {
+        pageTag.className = "step-page-tag";
+        meta.append(pageTag, statusTag);
+      }
       const deleteButton = readOnly ? null : document.createElement("button");
       if (deleteButton) {
         deleteButton.className = "step-delete-btn";
@@ -218,17 +403,39 @@ if (!window.RecorderStepView) {
         deleteButton.innerHTML = iconSvg("trash", 14);
       }
       header.append(meta);
-      if (deleteButton) header.append(deleteButton);
       const description = document.createElement("p");
       description.className = "step-description";
+      if (!readOnly) header.append(description);
+      const editStep = action.type === "type" ? editInputValue : renameClickTarget;
+      const renameButton = (action.type === "click" || action.type === "type") && action.id && !readOnly
+        ? document.createElement("button") : null;
+      const actions = readOnly ? null : document.createElement("div");
+      if (actions) {
+        actions.className = "step-card-actions";
+        if (renameButton) {
+          renameButton.type = "button";
+          renameButton.className = "step-rename-btn";
+          renameButton.title = action.type === "type"
+            ? t("editInputValue", [], "编辑输入值") : t("renameClickTarget", [], "设置点击目标名称");
+          renameButton.setAttribute("aria-label", renameButton.title);
+          renameButton.innerHTML = iconSvg("pencil", 14);
+          actions.append(renameButton);
+        }
+        actions.append(deleteButton);
+        header.append(actions);
+      }
       const mediaRow = document.createElement("div");
       mediaRow.className = "step-media-row";
       mediaRow.id = `step-media-${viewId}-${++nextMediaId}`;
       const mediaToggle = readOnly ? null : document.createElement("button");
+      const mediaToggleCount = mediaToggle ? document.createElement("span") : null;
       if (mediaToggle) {
         mediaToggle.type = "button";
         mediaToggle.className = "step-screenshots-toggle";
         mediaToggle.hidden = true;
+        mediaToggle.innerHTML = iconSvg("image", 14);
+        mediaToggle.append(mediaToggleCount);
+        deleteButton.before(mediaToggle);
         mediaToggle.setAttribute("aria-controls", mediaRow.id);
         mediaToggle.addEventListener("click", () => {
           const current = currentActions[entry.index];
@@ -255,28 +462,40 @@ if (!window.RecorderStepView) {
       afterCaption.textContent = t("stepAfterShot", [], "操作后");
       afterWrap.appendChild(afterCaption);
       mediaRow.append(beforeWrap, mediaArrow, afterWrap);
-      details.append(header, description);
-      if (mediaToggle) details.append(mediaToggle);
-      details.append(mediaRow);
+      details.append(header, readOnly ? description : statusTag, mediaRow);
       if (checkbox) card.append(checkbox);
       card.append(stepIndex, details);
       const entry = {
-        card, checkbox, stepIndex, details, description, typeBadge, pageTag, statusTag,
-        deleteButton, mediaRow, mediaToggle, beforeWrap, afterWrap, mediaArrow, beforeCaption, afterCaption,
+        card, checkbox, stepIndex, details, description, typeBadge, pageTag, pageHeading, pageCheckbox, pageToggle, pageCount, pageName, pageTitle, statusTag,
+        deleteButton, mediaRow, mediaToggle, mediaToggleCount, beforeWrap, afterWrap, mediaArrow, beforeCaption, afterCaption,
         index: -1, signature: null, beforeKey: undefined, afterKey: undefined, afterRenderKey: undefined,
         actionId: action.id || null, captureState: undefined, captureReason: undefined,
         beforeMedia: null, afterMedia: null
       };
+      renameButton?.addEventListener("click", () => {
+        const current = currentActions[entry.index];
+        if (current?.type === action.type && current.id === entry.actionId) {
+          editStep(current).catch(error => reportError(error.message));
+        }
+      });
       deleteButton?.addEventListener("click", event => {
         event.stopPropagation();
         deleteStep(entry.index).catch(error => reportError(error.message));
       });
       checkbox?.addEventListener("change", () => {
-        if (checkbox.checked) selectedActionIds.add(entry.actionId);
+        if (checkbox.checked && entry.actionId) selectedActionIds.add(entry.actionId);
         else selectedActionIds.delete(entry.actionId);
-        card.classList.toggle("is-selected", checkbox.checked);
-        updateSelection(currentActions);
+        refreshSelection();
       });
+      pageCheckbox?.addEventListener("change", () => {
+        const page = pageSelections.get(entry.pageName.textContent);
+        for (const id of page.ids) {
+          if (pageCheckbox.checked) selectedActionIds.add(id);
+          else selectedActionIds.delete(id);
+        }
+        refreshSelection();
+      });
+      pageToggle?.addEventListener("click", () => togglePageSegment(entry));
       return entry;
     }
     /**
@@ -326,20 +545,21 @@ if (!window.RecorderStepView) {
       for (const id of selectedActionIds) if (!liveActionIds.has(id)) selectedActionIds.delete(id);
       const liveKeys = new Set(actions.map(actionKey));
       for (const key of expansionOverrides.keys()) if (!liveKeys.has(key)) expansionOverrides.delete(key);
-      virtualWindow.reset(actions.map(actionKey), stepsContainer.classList.contains("screenshots-disabled") || !screenshotsExpandedDefault ? 85 : 130);
       resizeObserver.observe(stepsContainer);
+      updateSelection();
+      updatePageSegments();
+      resetStepWindow();
       renderWindow();
       if (appended && (recording || (!firstRender && wasNearBottom))) scrollToLatest();
       firstRender = false;
-      updateSelection(actions);
     }
 
-    function renderWindow() {
+    function noteHeight() { return screenshotsDisabledNote ? screenshotsDisabledNote.offsetHeight + 6 : 0; }
+    function renderWindow(scrollTop = stepsContainer.scrollTop) {
       const actions = currentActions, capture = currentCapture;
-      const virtual = actions.length > 200;
-      const noteHeight = screenshotsDisabledNote ? screenshotsDisabledNote.offsetHeight + 6 : 0;
-      const range = virtual ? virtualWindow.range(stepsContainer.scrollTop - noteHeight, stepsContainer.clientHeight)
-        : { start: 0, end: actions.length, before: 0, after: 0 };
+      const count = visibleIndices.length;
+      const range = count > 200 ? virtualWindow.range(scrollTop - noteHeight(), stepsContainer.clientHeight)
+        : { start: 0, end: count, before: 0, after: 0 };
       const seen = new Set();
       // The empty state anchors the first card; with screenshots off the note takes
       // that place, so cards can never end up above the explanation for them.
@@ -355,35 +575,23 @@ if (!window.RecorderStepView) {
         if (cursor) cursor.after(topSpacer); else stepsContainer.prepend(topSpacer);
         cursor = topSpacer;
       } else topSpacer.remove();
-      for (let index = range.start; index < range.end; index++) {
+      for (let position = range.start; position < range.end; position++) {
+        const index = visibleIndices[position];
         const action = actions[index];
         const key = actionKey(action, index);
         seen.add(key);
-        const { desc } = describeStep(action);
-        const signature = textSignature(action, desc);
         let entry = cardEntries.get(key);
         if (!entry) {
           entry = createCard(action, index);
           cardEntries.set(key, entry);
-          entry.card.dataset.virtualKey = key;
           resizeObserver.observe(entry.card);
         }
-        if (entry.signature !== signature) {
-          entry.typeBadge.className = `step-type-badge ${String(action.type || "unknown").toLowerCase()}`;
-          entry.typeBadge.textContent = window.StepDocGenerator
-            ? window.StepDocGenerator.getActionLabel(action.type)
-            : t("actionGeneric", [], "操作");
-          entry.pageTag.textContent = action.pageName || "page1";
-          entry.description.textContent = desc;
-          entry.description.title = desc;
-          entry.signature = signature;
-        }
+        entry.card.dataset.virtualKey = windowKey(action, index);
+        syncStepText(entry, action);
+        syncPageHeading(entry, index);
         entry.actionId = action.id || null;
-        if (entry.checkbox) {
-          entry.checkbox.checked = !!action.id && selectedActionIds.has(action.id);
-          describeSelectionCheckbox(entry.checkbox, index);
-          entry.card.classList.toggle("is-selected", entry.checkbox.checked);
-        }
+        if (entry.checkbox) describeSelectionCheckbox(entry.checkbox, index);
+        syncSelection(entry);
         const resolvedCaptureState = globalThis.RecorderCaptureState.resolve(action, capture);
         ctx.syncMedia(entry, action, index, resolvedCaptureState);
         ctx.syncCaptureState(entry, action, resolvedCaptureState);
@@ -424,8 +632,17 @@ if (!window.RecorderStepView) {
       }
     }
     function patchSteps(actions, capture, changedIds) {
+      const pageChanged = !readOnly && actions.some((action, index) =>
+        changedIds.has(action.id) && stepPage(action) !== stepPage(currentActions[index]));
       currentActions = actions;
       updateCaptureState(capture);
+      if (pageChanged) {
+        updateSelection();
+        updatePageSegments();
+        resetStepWindow();
+        renderWindow();
+        return;
+      }
       for (const id of changedIds) {
         const entry = cardEntries.get(`id:${id}`);
         if (!entry) continue;
@@ -434,10 +651,9 @@ if (!window.RecorderStepView) {
         const state = globalThis.RecorderCaptureState.resolve(action, capture);
         ctx.syncMedia(entry, action, entry.index, state);
         ctx.syncCaptureState(entry, action, state);
-        const { desc } = describeStep(action);
-        entry.description.textContent = entry.description.title = desc;
-        entry.signature = textSignature(action, desc);
+        syncStepText(entry, action);
       }
+      if (!readOnly) for (const entry of cardEntries.values()) syncPageHeading(entry, entry.index);
     }
     function dispose() {
       if (windowFrame) cancelAnimationFrame(windowFrame);
@@ -447,6 +663,8 @@ if (!window.RecorderStepView) {
       bottomSpacer.remove();
       virtualWindow.clear();
       currentActions = [];
+      pageSegments = [];
+      visibleIndices = [];
       currentCapture = {};
       firstRender = true;
       ctx.getObserver()?.disconnect();
@@ -458,6 +676,8 @@ if (!window.RecorderStepView) {
       }
       cardEntries.clear();
       selectedActionIds.clear();
+      pageSelections.clear();
+      collapsedSegments.clear();
       expansionOverrides.clear();
       objectUrls.forEach(URL.revokeObjectURL);
       objectUrls.clear();
@@ -468,20 +688,19 @@ if (!window.RecorderStepView) {
         if (checked && action.id) selectedActionIds.add(action.id);
         else selectedActionIds.delete(action.id);
       }
-      cardEntries.forEach(entry => {
-        if (entry.checkbox) entry.checkbox.checked = selectAllSteps.checked;
-        entry.card.classList.toggle("is-selected", selectAllSteps.checked);
-      });
-      updateSelection(currentActions);
+      refreshSelection();
     });
     deleteSelectedStepsBtn?.addEventListener("click", () => {
       deleteSelectedSteps().catch(error => {
         reportError(error.message);
-        updateSelection(currentActions);
+        refreshSelection();
       });
     });
     return { dispose, renderSteps, patchSteps, updateCaptureState, setRecording, setScreenshotsExpandedDefault,
-      setWorkspaceContext: value => { workspaceContext = value || {}; } };
+      setWorkspaceContext: value => {
+        if (workspaceContext.workspaceDraftId !== value?.workspaceDraftId) collapsedSegments.clear();
+        workspaceContext = value || {};
+      } };
   }
   window.RecorderStepView = { create };
 }

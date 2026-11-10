@@ -6,14 +6,15 @@ const vm = require("node:vm");
 
 function harness() {
   class Element {
-    constructor(value, editor = false) {
+    constructor(value, editor = false, attrs = {}) {
       this.tagName = editor ? "DIV" : "INPUT";
       this.isContentEditable = editor;
       this.isConnected = true;
+      this.attrs = attrs;
       this.setValue(value);
     }
     setValue(value) { this.value = this.innerText = this.textContent = value; }
-    getAttribute() { return null; }
+    getAttribute(name) { return this.attrs?.[name] ?? null; }
     closest() { return this.isContentEditable ? this : null; }
   }
   const timers = new Map();
@@ -31,7 +32,7 @@ function harness() {
     vm.runInContext(fs.readFileSync(path.join(__dirname, "../content", file), "utf8"), context);
   }
   const recorder = context.RecorderInputRecorder.create({ recordAction: action => actions.push(action) });
-  return { recorder, actions, field: (value = "", editor = false) => new Element(value, editor),
+  return { recorder, actions, field: (value = "", editor = false, attrs = {}) => new Element(value, editor, attrs),
     focus(field) { context.document.activeElement = field; recorder.handleFocus({ target: field, isTrusted: true }); },
     edit(field, value) {
       recorder.handleBeforeInput({ target: field, isTrusted: true });
@@ -83,6 +84,32 @@ test("clearing existing text, including to an editor filler, records an empty va
     assert.equal(h.actions.length, 1);
     assert.equal(h.actions[0].value, "");
   }
+});
+
+test("a click's script-driven clear is recorded only if the click cannot account for it", () => {
+  for (const accepted of [true, false]) {
+    const h = harness();
+    const field = h.field();
+    h.focus(field);
+    h.edit(field, "search text");
+    h.recorder.scheduleCommittedCheck(() => accepted);
+    field.setValue("");
+    h.recorder.handleInput({ target: field, isTrusted: false });
+    h.recorder.handleBlur({ target: field });
+    h.runTimers();
+    assert.deepEqual(h.actions.map(action => action.value), accepted ? ["search text"] : ["search text", ""]);
+  }
+});
+
+test("a trusted deletion stays an input step after a click that left the value intact", () => {
+  const h = harness();
+  const field = h.field("search text");
+  h.focus(field);
+  h.recorder.markUserTouched(field);
+  h.recorder.scheduleCommittedCheck(() => true);
+  h.edit(field, "");
+  h.recorder.flush();
+  assert.deepEqual(h.actions.map(action => action.value), [""]);
 });
 
 test("normal typing retains spaces, inline zero-width characters and emoji joiners", () => {
@@ -141,4 +168,30 @@ test("refocusing a field snapshots its new initial value without suppressing lat
   h.edit(field, "second input");
   h.recorder.flush();
   assert.equal(h.actions[1].value, "second input");
+});
+
+test("a script-dispatched select change is not a step, a trusted one is", () => {
+  const h = harness();
+  const select = h.field("b");
+  select.tagName = "SELECT";
+  select.options = [{ text: "A", value: "a" }, { text: "B", value: "b" }];
+  select.selectedIndex = 1;
+  h.recorder.handleChange({ target: select, isTrusted: false });
+  assert.equal(h.actions.length, 0);
+  h.recorder.handleChange({ target: select, isTrusted: true });
+  assert.equal(h.actions.length, 1);
+  assert.equal(h.actions[0].type, "select");
+  assert.equal(h.actions[0].value, "b");
+  assert.equal(h.actions[0].label, "B");
+});
+
+test("date inputs commit their picked value as a type step", () => {
+  const h = harness();
+  const date = h.field("", false, { type: "date" });
+  h.focus(date);
+  date.setValue("2026-11-04");
+  h.recorder.handleChange({ target: date, isTrusted: true });
+  assert.equal(h.actions.length, 1);
+  assert.equal(h.actions[0].type, "type");
+  assert.equal(h.actions[0].value, "2026-11-04");
 });

@@ -14,6 +14,8 @@ export function createApplicationRoutes({
   notifyStepsUpdated,
   queueAction,
   queueRecordingTransition,
+  queueTabRegistration,
+  scope,
   screenshots,
   session,
   sidePanel,
@@ -41,6 +43,23 @@ export function createApplicationRoutes({
       return sidePanel.prepareForTab(request.tabId);
     },
     [MESSAGE.getDraftState]: request => queueRecordingTransition(() => drafts.read(request.tabId)),
+    [MESSAGE.joinRecordingPage]: (request, sender) => {
+      const { tabId, url, workspaceDraftId } = request;
+      if (sender.url?.split(/[?#]/)[0] !== chrome.runtime.getURL("ui/popup.html")
+          || !workspaceDraftId || !Number.isInteger(tabId) || typeof url !== "string") return { success: false };
+      return guarded(request, async () => {
+        if (!await scope.prepareJoinedTab(tabId, url)) return { success: false };
+        return queueTabRegistration(async () => {
+          const result = await queueAction(async () => {
+            const tab = await chrome.tabs.get(tabId).catch(() => null);
+            if (!tab || tab.url !== url) return { success: false };
+            return drafts.joinRecordingPage(tabId, workspaceDraftId);
+          });
+          if (result.success) await scope.startTabCapture(tabId);
+          return result;
+        });
+      });
+    },
     [MESSAGE.selectDraft]: request => queueRecordingTransition(() => drafts.activate(request.tabId, request.draftId)),
     [MESSAGE.getActions]: request => queueRecordingTransition(async () => {
       if (Number.isInteger(request.scopeTabId) && drafts) {
@@ -83,6 +102,10 @@ export function createApplicationRoutes({
     [MESSAGE.deleteCaseFolder]: request => cases.removeFolder(request.folderId),
     [MESSAGE.moveCasesToFolder]: request => cases.moveToFolder(request.caseIds, request.folderId),
 
+    [MESSAGE.renameClickTarget]: request => guarded(request,
+      () => queueAction(() => actionLog.renameClickTarget(request.actionId, request.name))),
+    [MESSAGE.editInputValue]: request => guarded(request,
+      () => queueAction(() => actionLog.editInputValue(request.actionId, request.value))),
     [MESSAGE.deleteStep]: request => guarded(request, () => queueAction(() => actionLog.deleteStep(request.index))),
     [MESSAGE.deleteSteps]: request => guarded(request, () => queueAction(() => actionLog.deleteSteps(request.actionIds))),
     [MESSAGE.cleanupScreenshots]: request => mediaCleanup.cleanupOrphans({ force: !!request.force }),
@@ -90,7 +113,6 @@ export function createApplicationRoutes({
       const beforeFrameData = screenshots?.snapshotFrameData?.(sender.tab?.id);
       const captured = accessibility?.captureAction(request.payload, sender);
       return queueAction(async () => {
-        console.log("[Background] Received logAction:", request.payload?.type, "from tab:", sender.tab?.id);
         await actionLog.log(captured ? await captured : request.payload, sender.tab, { beforeFrameData,
           frameId: sender.frameId, documentId: sender.documentId });
         notifyStepsUpdated();

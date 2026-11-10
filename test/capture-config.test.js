@@ -223,21 +223,19 @@ test("recording and saved-case management stay in their own surfaces", () => {
   assert.match(popup, /id="download-doc-btn"/);
   assert.match(popup, /class="app-header compact recorder-header"[\s\S]*?id="record-btn"/);
   assert.match(popup, /id="download-doc-compact-btn"[^>]*data-i18n-title="exportResult"[^>]*data-i18n-aria-label="exportResult"/);
-  // Two different actions, two different weights: clearing the whole workspace is
-  // the quiet control in the step list's toolbar, while deleting a selection is a
-  // danger button the row reveals only while something is selected
-  // (.steps-section-head.is-selecting), so the toolbar never shows a pair of peers.
-  assert.match(popup, /class="step-batch-actions"[\s\S]*?class="step-clear-btn"[^>]*data-i18n-aria-label="clearSteps"/);
-  assert.match(popup, /class="step-batch-actions"[\s\S]*?class="btn btn-danger step-batch-delete"/);
+  const toolbar = popup.match(/<section class="case-actionbar"[\s\S]*?<\/section>/)?.[0] || "";
+  assert.match(toolbar, /^<section[^>]*>\s*<header class="app-header compact recorder-header">[\s\S]*?id="capture-settings-btn"[\s\S]*?id="record-btn"[\s\S]*?<\/header>/);
+  assert.match(toolbar, /id="save-current-case-btn"[\s\S]*?id="copy-task-btn"[\s\S]*?id="recording-pages"[\s\S]*?class="steps-section-head"/);
+  assert.match(toolbar, /class="step-batch-actions"[\s\S]*?id="step-select-all"[\s\S]*?class="steps-section-title"[\s\S]*?id="batch-delete-steps-btn"[\s\S]*?id="clear-steps-btn"/);
   assert.match(read("ui", "app", "step-view.js"), /is-selecting", selectedCount > 0/);
   assert.match(read("ui", "styles", "steps.css"), /\.step-batch-actions \.btn \{\s*display: none;/);
   assert.doesNotMatch(popup, /id="step-selection-count"/);
   assert.match(popup, /class="selection-control step-select-all"[\s\S]*?class="selection-checkbox"/);
-  assert.match(popup, /class="case-actionbar"[\s\S]*?id="save-current-case-btn"[\s\S]*?class="copy-task-control"[\s\S]*?id="copy-task-btn"/);
+  assert.match(popup, /class="case-actionbar"[\s\S]*?id="save-current-case-btn"[\s\S]*?class="copy-task-control tooltip"\s*>\s*<button id="copy-task-btn"/);
   assert.match(popup, /id="copy-task-btn"[\s\S]*?data-i18n="copyForAI"/);
   assert.match(popup, /id="copy-task-btn"[\s\S]*?aria-describedby="copy-task-tooltip"/);
   assert.match(popup, /class="tooltip-content"[\s\S]*?role="tooltip"[\s\S]*?data-i18n="copyTaskHint"/);
-  assert.match(popup, /class="tooltip-trigger copy-task-info"[\s\S]*?data-i18n-aria-label="copyTaskHelp"/);
+  assert.doesNotMatch(popup, /copy-task-info/);
   const recorderPanel = read("ui", "app", "recorder-panel.js");
   assert.doesNotMatch(recorderPanel, /restartRecordBtn|restartRecordingMessage/);
   assert.match(recorderPanel, /copyTaskBtn[\s\S]*?navigator\.clipboard\.writeText[\s\S]*?StepDocGenerator\.generateTask/);
@@ -388,8 +386,9 @@ test("a recording holds the worker open, and releases it on both stop paths", ()
   assert.match(content, /function openKeepalive\(\) \{\s*if \(window\.top !== window \|\| keepalivePort\) return/);
   // Released on the message and on the storage flag, because a backgrounded tab may
   // never receive the message and a port left open outlives the recording.
-  assert.match(content, /closeKeepalive\(\);/);
-  assert.match(content, /if \(isRecording\) openKeepalive\(\);\s*else closeKeepalive\(\);/);
+  assert.match(content, /function endLocalRecording\(\) \{[^}]*closeKeepalive\(\);/);
+  assert.match(content, /request\.action === MESSAGE\.stopRecording\) \{[\s\S]*?endLocalRecording\(\);/);
+  assert.match(content, /if \(!changes\.isRecording\.newValue\) \{[^}]*if \(isRecording\) endLocalRecording\(\);/);
 });
 
 test("interrupted captures resolve instead of waiting forever", () => {

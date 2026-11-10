@@ -18,9 +18,10 @@ function contentHarness() {
   let messageHandler;
   let nextTimer = 0;
   const noop = () => {};
-  const field = { value: "draft", isConnected: true, isContentEditable: false };
+  class Element {}
+  const field = Object.assign(new Element(), { value: "draft", isConnected: true, isContentEditable: false });
   const context = {
-    console: { log: noop, warn: noop, error: noop }, Element: class {},
+    console: { log: noop, warn: noop, error: noop }, Element,
     setTimeout: fn => { timers.set(++nextTimer, fn); return nextTimer; },
     clearTimeout: id => timers.delete(id),
     document: { title: "Test", activeElement: field,
@@ -72,7 +73,9 @@ function contentHarness() {
       for (const callback of pending) callback();
     },
     message: action => messageHandler({ action, recordNavigate: false }, {}, reply => replies.push(reply.status)),
-    input: () => listeners.input?.({ target: field, isTrusted: true })
+    input: () => listeners.input?.({ target: field, isTrusted: true }),
+    key: event => listeners.keydown?.(event),
+    keyTarget: field
   };
 }
 
@@ -353,7 +356,32 @@ test("an injection begun before stop cannot restart a page in a later recording 
   injection.beginRecordingInjection();
   releaseInjection();
   assert.equal(await pending, false);
-  assert.deepEqual(sent, ["pingRecorder"]);
+  assert.deepEqual(sent, []);
+});
+
+test("recording retries when a popup navigates between ping and start", async () => {
+  const sent = [];
+  let documentId = "opening-document";
+  globalThis.chrome = {
+    scripting: { executeScript: async () => [
+      { frameId: 0, documentId }, { frameId: 1, documentId: "editor-frame" }
+    ] },
+    tabs: { sendMessage: async (_id, message, target) => {
+      sent.push([message.action, target.documentId]);
+      if (message.action === "startRecording" && target.documentId === "opening-document") {
+        documentId = "loaded-document";
+        throw new Error("The message port closed before a response was received.");
+      }
+    } }
+  };
+  const injection = await import("../background/recording/injection.js");
+  injection.beginRecordingInjection();
+  assert.equal(await injection.injectRecordingScripts(1, false, 2), true);
+  assert.deepEqual(sent, [
+    ["pingRecorder", "opening-document"], ["startRecording", "opening-document"],
+    ["pingRecorder", "loaded-document"], ["startRecording", "loaded-document"],
+    ["startRecording", "editor-frame"]
+  ]);
 });
 
 test("post-detach persistence keeps the worker active and releases its heartbeat even on failure", async context => {
@@ -389,4 +417,16 @@ test("post-detach persistence keeps the worker active and releases its heartbeat
   assert.equal(scopeCleared, true);
   assert.equal(clear.mock.callCount(), 1);
   assert.equal(clear.mock.calls[0].arguments[0], timer);
+});
+
+test("IME composition keys are not recorded as workflow steps", () => {
+  const h = contentHarness();
+  h.message("startRecording");
+  h.key({ key: "Enter", isTrusted: true, isComposing: true, keyCode: 229, target: h.keyTarget });
+  h.key({ key: "Escape", isTrusted: true, isComposing: true, keyCode: 229, target: h.keyTarget });
+  assert.equal(h.sent.length, 0, "composing Enter and Escape belong to the IME");
+  h.key({ key: "Enter", isTrusted: true, isComposing: false, keyCode: 13, target: h.keyTarget });
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.sent[0].payload.type, "pressKey");
+  assert.equal(h.sent[0].payload.key, "Enter");
 });

@@ -29,6 +29,8 @@
      */
     analyze(element) {
       if (!element) return null;
+      const roleHint = this.getRoleHint(element);
+      const nameHint = this.getAccessibleNameHint(element, roleHint?.role ?? null);
 
       return {
         _axRef: retainAXTarget(element),
@@ -38,8 +40,10 @@
         className: element.getAttribute("class") || null,
         name: element.getAttribute("name") || null,
         type: element.getAttribute("type") || null,
-        role: this.computeRole(element),
-        accessibleName: this.computeAccessibleName(element),
+        role: roleHint?.role ?? null,
+        roleSource: roleHint?.source ?? null,
+        accessibleName: nameHint?.name ?? null,
+        accessibleNameSource: nameHint?.source ?? null,
 
         // Stability signals
         dataAttributes: this.extractDataAttributes(element),
@@ -76,8 +80,12 @@
      * Computes semantic ARIA role.
      */
     computeRole(element) {
+      return this.getRoleHint(element)?.role ?? null;
+    },
+
+    getRoleHint(element) {
       const explicitRole = element.getAttribute("role");
-      if (explicitRole) return explicitRole.trim().toLowerCase();
+      if (explicitRole) return { role: explicitRole.trim().toLowerCase(), source: "role" };
 
       const tag = element.tagName.toUpperCase();
       const roleMap = {
@@ -104,7 +112,10 @@
         UL: "list", OL: "list",
         LI: "listitem"
       };
-      return roleMap[tag] || null;
+      const role = roleMap[tag];
+      if (!role) return null;
+      const sources = { A: "a[href]", INPUT: element.getAttribute("type") ? "input[type]" : "input (default type)" };
+      return { role, source: sources[tag] || "HTML tag" };
     },
 
     getInputRole(el) {
@@ -124,6 +135,11 @@
      * AccName sources available through ordinary DOM APIs.
      */
     computeAccessibleName(el) {
+      return this.getAccessibleNameHint(el)?.name ?? null;
+    },
+
+    getAccessibleNameHint(el, role = this.computeRole(el)) {
+      const from = (source, text) => ({ name: this.cleanText(text), source });
       // aria-labelledby
       const labelledby = el.getAttribute("aria-labelledby");
       if (labelledby) {
@@ -133,54 +149,53 @@
             return labelEl ? this.getElementText(labelEl) : "";
           })
           .filter(Boolean);
-        if (parts.length) return this.cleanText(parts.join(" "));
+        if (parts.length) return from("aria-labelledby", parts.join(" "));
       }
 
       // aria-label
       const ariaLabel = el.getAttribute("aria-label");
-      if (ariaLabel) return this.cleanText(ariaLabel);
+      if (ariaLabel) return from("aria-label", ariaLabel);
 
       // Associated label
       const tag = el.tagName.toUpperCase();
       if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) {
         if (el.id) {
           const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-          if (label) return this.cleanText(this.getElementText(label));
+          if (label) return from("label[for]", this.getElementText(label));
         }
         const parentLabel = el.closest("label");
         if (parentLabel) {
           const clone = parentLabel.cloneNode(true);
           const nested = clone.querySelector("input, textarea, select");
           if (nested) nested.remove();
-          return this.cleanText(this.getElementText(clone));
+          return from("wrapping label", this.getElementText(clone));
         }
         const placeholder = el.getAttribute("placeholder");
-        if (placeholder) return this.cleanText(placeholder);
+        if (placeholder) return from("placeholder", placeholder);
       }
 
       // Image alt
       if (tag === "IMG") {
         const alt = el.getAttribute("alt");
-        if (alt !== null) return this.cleanText(alt);
+        if (alt !== null) return from("alt", alt);
       }
 
       // Button/link/menu-item content
-      const role = this.computeRole(el);
       if (["button", "link", "heading", "option", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "treeitem"].includes(role) || tag === "OPTION") {
         const content = this.getElementText(el);
-        if (content) return this.cleanText(content);
+        if (content) return from("element text", content);
       }
 
       // Title attribute
       const title = el.getAttribute("title");
-      if (title) return this.cleanText(title);
+      if (title) return from("title", title);
 
       // Input value for buttons
       if (tag === "INPUT") {
         const type = (el.getAttribute("type") || "").toLowerCase();
         if (["submit", "button", "reset"].includes(type)) {
           const val = el.getAttribute("value");
-          if (val) return this.cleanText(val);
+          if (val) return from("value", val);
         }
       }
 
@@ -439,8 +454,11 @@
         "h1, h2, h3, h4, h5, h6, label, button, [role='button'], legend, caption"
       );
 
+      let examined = 0;
       for (const candidate of candidates) {
         if (candidate === el) continue;
+        // Without a form/section container this scans the whole page; bound it.
+        if (++examined > 300) break;
         const text = this.cleanText(this.getElementText(candidate)).substring(0, 100);
         if (text && text.length > 1) {
           landmarks.push({

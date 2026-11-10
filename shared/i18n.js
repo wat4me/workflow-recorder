@@ -14,25 +14,18 @@
   let messages = {};
 
   function formatFallback(template, substitutions) {
-    const values = Array.isArray(substitutions) ? substitutions : [substitutions];
-    return values.reduce(
-      (text, value, index) => text.replaceAll(`$${index + 1}`, value == null ? "" : String(value)),
-      String(template || "")
-    );
+    return formatMessage({ message: template }, substitutions);
   }
 
   function formatMessage(entry, substitutions) {
     const values = Array.isArray(substitutions) ? substitutions : [substitutions];
-    let text = String(entry?.message || "");
-    Object.entries(entry?.placeholders || {}).forEach(([name, placeholder]) => {
+    const replacements = new Map(values.map((value, index) => [`$${index + 1}`, String(value ?? "")]));
+    for (const [name, placeholder] of Object.entries(entry?.placeholders || {})) {
       const index = Number(/^\$(\d+)$/.exec(placeholder.content || "")?.[1]) - 1;
-      const value = index >= 0 && index < values.length ? values[index] : "";
-      text = text.replaceAll(`$${name.toUpperCase()}$`, value == null ? "" : String(value));
-    });
-    return values.reduce(
-      (text, value, index) => text.replaceAll(`$${index + 1}`, value == null ? "" : String(value)),
-      text
-    );
+      replacements.set(`$${name.toUpperCase()}$`, String(values[index] ?? ""));
+    }
+    return String(entry?.message || "").replace(/\$[A-Z_][A-Z_0-9]*\$|\$\d+/g,
+      token => replacements.get(token) ?? token);
   }
 
   function defaultLanguage() {

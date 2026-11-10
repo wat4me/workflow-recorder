@@ -104,10 +104,8 @@ export function isInheritedStep(origin, actionId) {
  *
  * The fork point is the end of the longest prefix that is still the same steps in
  * the same order. Both halves of the comparison are needed: the id catches a step
- * that was removed or reordered, and the signature catches one that kept its id
- * while its meaning changed. Copy-on-write is supposed to make the second case
- * impossible, so this is also the check that would notice if some future edit path
- * forgot to do it.
+ * that was removed or reordered. The signature also catches edits that keep the
+ * id, such as renaming a click target while its screenshot still refers to it.
  */
 export function describeFork(origin, actions) {
   const snapshot = origin?.originalActions || [];

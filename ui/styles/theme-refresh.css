@@ -4,10 +4,10 @@
 
 body { background: var(--bg-secondary); color: var(--text-primary); font-family: var(--font-ui); font-size: 13px; line-height: 1.5; }
 .app-container svg[stroke="currentColor"], .console-container svg[stroke="currentColor"] { stroke-width: var(--icon-stroke); stroke-linecap: round; stroke-linejoin: round; }
-.app-header { background: #fff; box-shadow: 0 1px 0 var(--border-color); }
+.app-header { background: var(--bg-primary); box-shadow: 0 1px 0 var(--border-color); }
 .app-main { background: transparent; }
 .console-panel, .case-library-panel, .preview-panel {
-  background: #fff;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
@@ -18,9 +18,9 @@ body { background: var(--bg-secondary); color: var(--text-primary); font-family:
 .btn, .icon-btn, input, select, textarea { border-radius: var(--radius-sm); }
 .btn { min-height: 34px; box-shadow: var(--shadow-xs); }
 .btn-primary, .btn-accent { box-shadow: 0 3px 8px rgb(79 70 229 / 20%); }
-.case-folder-sidebar { background: #fbfcfe; border-right-color: var(--border-color); }
-.library-actionbar { background: #fbfcfe; border-bottom-color: var(--border-color); }
-.empty-state { background: #fbfcfe; border: 1px dashed var(--border-hover); border-radius: var(--radius-md); }
+.case-folder-sidebar { background: var(--bg-subtle); border-right-color: var(--border-color); }
+.library-actionbar { background: var(--bg-subtle); border-bottom-color: var(--border-color); }
+.empty-state { background: var(--bg-subtle); border: 1px dashed var(--border-hover); border-radius: var(--radius-md); }
 
 /* Workspace shell and library: a quiet rail and a scannable list. */
 .console-container { max-width: none; }
@@ -34,32 +34,17 @@ body { background: var(--bg-secondary); color: var(--text-primary); font-family:
 .case-folder-hint { font-size: 11px; }
 .case-folder-button.is-active { background: var(--accent-light); box-shadow: inset 3px 0 var(--accent-color); }
 .library-item { margin-bottom: 0; min-height: 78px; border: 0; border-bottom: 1px solid var(--border-color); border-radius: 0; padding: 12px; }
-.library-item:hover { background: #f8faff; box-shadow: none; }
+.library-item:hover { background: var(--bg-list-hover); box-shadow: none; }
 .library-item.is-selected { background: var(--accent-light); box-shadow: inset 3px 0 var(--accent-color); }
 .library-item-info:enabled:hover { box-shadow: none; }
 .library-item-info strong { font-size: 14px; font-weight: 600; }
 .library-item-info span, .library-selection { color: var(--text-muted); font-size: 12px; }
 .case-library-list { padding: 0 16px; }
-.case-search-field { background: #fff; }
+.case-search-field { background: var(--bg-primary); }
 .empty-icon { opacity: 1; color: var(--accent-color); padding: 14px; background: var(--accent-light); border-radius: 16px; }
 .empty-state p { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .empty-state > span { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
 
-/* Sidebar: one content surface, clear field labels and a compact toolbar. */
-.ai-sidebar h2 { font-size: 17px; letter-spacing: -.02em; }
-.ai-sidebar.is-idle #ai-sidebar-status { color: var(--text-muted); }
-#ai-explore-form label { color: var(--text-primary); font-size: 13px; margin-top: 16px; }
-#ai-explore-form :is(input, select, textarea) { font-size: 13px; line-height: 1.5; border-color: var(--border-hover); }
-.ai-sidebar .ai-sidebar-hint { font-size: 12px; line-height: 1.65; }
-.ai-explore-target { border-block: 1px solid var(--border-color); padding-block: 8px; }
-#ai-explore-tabs { color: var(--accent-color); background: var(--accent-light); border-color: var(--accent-subtle); }
-#ai-explore-start, #ai-sidebar-complete-takeover, #preview-ai-btn {
-  --button-bg: var(--accent-color); --button-border: var(--accent-color); --button-text: white;
-  --button-hover-bg: var(--accent-hover); --button-hover-text: white; --button-hover-border: var(--accent-hover);
-}
-/* Both bars title the section under them, so they share one size, one weight and,
-   with the section head's matching inline padding, one left edge. */
-.export-name-field > span,
 .steps-section-head h2 { color: var(--text-primary); font-size: 12px; font-weight: 600; }
 .step-card { box-shadow: none; }
 
@@ -74,7 +59,6 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-co
 @media (max-width: 700px) {
   .workbench-header { padding-inline: 12px; }
   .library-head { padding-block: 12px; }
-  .ai-sidebar { padding: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -82,13 +66,9 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-co
 }
 
 /* Keep the recorder compact without shrinking text or screenshot thumbnails. */
-.app-container .recorder-header { padding-block: 6px; gap: 6px; }
+.app-container .recorder-header { gap: 6px; }
 .app-container .header-record-actions .btn { min-height: 32px; padding-block: 5px; }
-.app-container .app-main { padding-top: 6px; gap: 5px; }
-.app-container .case-actionbar { padding: 6px 8px; }
 .app-container .case-action-buttons .btn { min-height: 32px; padding-block: 5px; }
-.app-container .steps-container { gap: 4px; }
-.app-container .step-card { padding-block: 6px; }
 .confirm-content .prompt-validation-error { color: var(--danger-color); margin: 4px 0 0; }
 
 .name-length-counter { display: block; margin-top: 3px; color: var(--text-muted); font-size: 11px; text-align: right; }
@@ -151,25 +131,4 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-co
   white-space: nowrap;
 }
 .app-container .copy-task-control > .btn { flex: 1; min-width: 0; }
-.app-container .copy-task-control { align-items: center; gap: 5px; }
-.app-container .copy-task-tooltip {
-  position: relative;
-  inset: auto;
-  transform: none;
-  color: var(--text-muted);
-}
-.app-container .copy-task-tooltip .tooltip-content { right: 0; left: auto; }
-.app-container .copy-task-tooltip .tooltip-content::after { right: 4px; left: auto; }
-.app-container .step-batch-actions :is(.step-batch-delete, .step-select-all) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 0;
-}
-.app-container .step-batch-actions .step-clear-btn { min-height: 30px; white-space: nowrap; }
-.app-container .steps-section-head:not(.is-selecting) .step-batch-delete { display: none; }
-.app-container .steps-section-head.is-empty .step-select-all { display: none; }
 .app-container .recover-recordings-btn > svg { display: block; }

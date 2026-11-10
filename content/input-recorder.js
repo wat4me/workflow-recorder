@@ -9,6 +9,7 @@
     let userTouchedInputs = new WeakSet();
     const committedTimers = new Set();
     let lastUserTouchedInput = null;
+    let clickClear = null;
 
     function inputValue(editable) {
       const value = getEditableValue(editable);
@@ -40,6 +41,13 @@
       const editable = getEditableTarget(target);
       if (!editable || !userTouchedInputs.has(editable)) return;
       const value = inputValue(editable);
+      if (value === "" && clickClear?.target === editable && clickClear.confirm()) {
+        // The click already accounts for this clear. Update the baseline so
+        // later blur and commit checks do not emit a second step.
+        clickClear = null;
+        lastKnownValues.set(editable, value);
+        return;
+      }
       const previous = lastKnownValues.get(editable);
       if (previous === value) return;
       lastKnownValues.set(editable, value);
@@ -63,19 +71,29 @@
       recordValue(editable);
     }
 
-    function scheduleCommittedCheck() {
+    function scheduleCommittedCheck(confirmClickClear) {
+      if (confirmClickClear) flushClickClear();
       const target = lastTouchedInput();
       if (!target) return;
+      let observedClick = null;
+      if (confirmClickClear) {
+        if (activeTimers.has(target)) flushTarget(target);
+        if (inputValue(target) !== "") {
+          observedClick = clickClear = { target, confirm: confirmClickClear };
+        }
+      }
       [0, 150].forEach(delay => {
         const timer = setTimeout(() => {
           committedTimers.delete(timer);
           flushTarget(target);
+          if (delay === 150 && clickClear === observedClick) clickClear = null;
         }, delay);
         committedTimers.add(timer);
       });
     }
 
     function flush() {
+      flushClickClear();
       for (const [target, timer] of activeTimers.entries()) {
         clearTimeout(timer);
         recordValue(target);
@@ -91,23 +109,37 @@
       lastKnownValues = new WeakMap();
       userTouchedInputs = new WeakSet();
       lastUserTouchedInput = null;
+      clickClear = null;
     }
 
     function handleBeforeInput(event) {
-      if (event.isTrusted) markUserTouched(event.target);
+      if (!event.isTrusted) return;
+      if (clickClear?.target === getEditableTarget(event.target)) flushClickClear();
+      markUserTouched(event.target);
+    }
+
+    function flushClickClear() {
+      if (!clickClear) return;
+      flushTarget(clickClear.target);
+      clickClear = null;
     }
 
     function handleFocus(event) {
       const target = getEditableTarget(event.target);
+      if (clickClear?.target === target && inputValue(target) === "") recordValue(target);
       // Focus captures the old value without treating script-driven focus as
       // user input. Do not overwrite a value still awaiting its typing commit.
       if (target && !activeTimers.has(target)) lastKnownValues.set(target, inputValue(target));
     }
 
     function handleInput(event) {
-      if (!event.isTrusted) return;
+      // Composition events carry intermediate text; the input event after
+      // compositionend commits the value the user actually produced.
+      if (!event.isTrusted || event.isComposing) return;
       const target = getEditableTarget(event.target);
       if (!target) return;
+      // A trusted input event is a separate edit, including native clears.
+      if (clickClear?.target === target) clickClear = null;
       markUserTouched(target, false);
       if (!userTouchedInputs.has(target)) return;
       if (activeTimers.has(target)) clearTimeout(activeTimers.get(target));
@@ -126,6 +158,9 @@
       if (!(target instanceof Element)) return;
       const tagName = target.tagName.toUpperCase();
       if (tagName === "SELECT") {
+        // A cascading form control updates its neighbouring selects from script;
+        // only the user's own choice may become a step.
+        if (!event.isTrusted) return;
         if (!window.SemanticElementAnalyzer) return;
         const selectedOption = target.options[target.selectedIndex];
         recordAction({
@@ -145,6 +180,7 @@
 
     return {
       flush,
+      flushClickClear,
       reset,
       handleBeforeInput,
       handleFocus,

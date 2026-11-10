@@ -189,7 +189,7 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
           const tabId = await resolveRootTabId();
           const [stored, workspace] = await Promise.all([
             chrome.storage.local.get(["isRecording", "activeCaseId", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, STEP_DISPLAY_SETTINGS_KEY]),
-            Number.isInteger(tabId) ? sendMessage({ action: MESSAGE.getDraftState, tabId }) : readActions().then(actions => ({ actions }))
+            Number.isInteger(tabId) ? sendMessage({ action: MESSAGE.getDraftState, tabId }) : readActions().then(actions => actions ? { actions } : { success: false })
           ]);
           if (workspace.success === false) throw new Error(workspace.error || "草稿读取失败");
           if (version === refreshVersion) renderState({ ...stored, ...(workspace.state || {}),

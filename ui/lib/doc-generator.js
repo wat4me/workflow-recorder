@@ -16,6 +16,15 @@
  */
 const PAGE_CLOSED_REASON = "pageClosed";
 
+/**
+ * describeStep rebuilt the AX JSON and DOM skeleton on every call; one render
+ * pass asked for the same step up to three times, and opening the screenshot
+ * gallery asked once per step. Keyed by the action object, which the UI treats
+ * as immutable between refreshes; the entry also verifies the two AX fields by
+ * identity because those are the ones a rebind can swap underneath it.
+ */
+const describeStepCache = new WeakMap();
+
 const StepDocGenerator = {
   uiText(key, substitutions, fallback) {
     return window.RecorderI18n?.t(key, substitutions, fallback) || fallback;
@@ -43,6 +52,10 @@ const StepDocGenerator = {
       lines.push("AX context is browser-computed evidence captured near the event; state may reflect immediate page updates. Re-resolve targets on the current page using AX and DOM context.");
       lines.push("");
     }
+    if (pages.length > 1 || actions.some(action => action.openedChildPage)) {
+      lines.push("Each [pageN] identifies a browser tab or window. Wait for newly opened pages and bind them to their recorded handles. Use the handle on each step to select the right page.");
+      lines.push("");
+    }
     pages.forEach(p => {
       p.visits.forEach((visit, index) => {
         const title = visit.title ? ` "${this.clean(visit.title, 120)}"` : "";
@@ -57,24 +70,26 @@ const StepDocGenerator = {
     // navigation keeps the same one; the URL has to be restated whenever it
     // changes or the model has no way to tell the flow moved on.
     const urlByPage = new Map();
-    // Handles seen so far, which is what lets a click that opened a page be told
-    // which one it opened.
-    const seenPages = new Set();
+    let previousPageName = null;
     actions.forEach((action, idx) => {
       const pageName = action.pageName || "page1";
       const step = this.describeStep(action);
       lines.push(`${idx + 1}. [${pageName}] ${step.detail}`);
-      seenPages.add(pageName);
+      step.targetDetails?.forEach(line => lines.push(`   ${line}`));
+      if (previousPageName && previousPageName !== pageName) {
+        lines.push(`   before this step: switch from [${previousPageName}] to [${pageName}]`);
+      }
+      previousPageName = pageName;
 
       // The two page-lifecycle events a reader cannot recover from the steps
       // alone: a page appearing, and a page disappearing. Without them a handle
       // that starts mid-document looks like it came from nowhere, and a flow that
       // ends because its window was closed looks like it simply stopped.
-      if (action.openedChildPage) {
-        const opened = this.nextNewPageName(actions, idx, seenPages);
-        // Opened but never used: there is no handle to name, and naming one would
-        // be a guess.
-        lines.push(opened ? `   -> opens ${opened}` : "   -> opens a new page");
+      if (action.openedPageName) {
+        const kind = ["tab", "window"].includes(action.openedPageKind) ? action.openedPageKind : "page";
+        lines.push(`   -> opens a new ${kind} as [${action.openedPageName}]`);
+      } else if (action.openedChildPage) {
+        lines.push("   -> opens a new page (destination handle not recorded)");
       }
       if (action.screenshotErrorReason === PAGE_CLOSED_REASON) {
         lines.push("   page closed after this step");
@@ -156,14 +171,29 @@ const StepDocGenerator = {
   /**
    * Describes a single action for step cards in popup / console UI.
    * @param {Object} action
-   * @returns {{desc: string, detail: string, context: string[]}}
+   * @returns {{desc: string, summary?: string, detail: string, targetDetails?: string[], context: string[]}}
    */
   describeStep(action) {
+    const cacheable = action && typeof action === "object";
+    if (cacheable) {
+      const cached = describeStepCache.get(action);
+      if (cached && cached.accessibility === action.accessibility
+        && cached.sourceAccessibility === action.sourceAccessibility
+        && cached.customTargetName === action.customTargetName) {
+        return cached.result;
+      }
+    }
     const step = this.describeDOMStep(action);
     const hit = action.hitTarget;
     const hitLines = hit ? [`recorded hit: ${this.renderTag(hit)}; interaction target is ${hit.ancestorDistance} level(s) above the hit node.`] : [];
-    return { ...step, context: [...hitLines, ...(step.context || []), ...this.buildAXLines(action.accessibility),
+    const axLines = action.type === "click" ? [] : this.buildAXLines(action.accessibility);
+    const result = { ...step, context: [...hitLines, ...(step.context || []), ...axLines,
       ...this.buildAXLines(action.sourceAccessibility, "AX source (browser-computed)")] };
+    if (cacheable) {
+      describeStepCache.set(action, { result, accessibility: action.accessibility,
+        sourceAccessibility: action.sourceAccessibility, customTargetName: action.customTargetName });
+    }
+    return result;
   },
 
   describeDOMStep(action) {
@@ -178,16 +208,47 @@ const StepDocGenerator = {
         const title = this.clean(action.title || "", 120);
         return {
           desc: this.uiText("stepNavigate", [title || action.url || ""], `打开页面：${title || action.url || ""}`),
+          summary: title || action.url,
           detail: `open ${action.url || ""}${title ? ` "${title}"` : ""}`,
           context: []
         };
       }
 
       case "click": {
+        const customName = this.clean(action.customTargetName, 120);
+        const displayName = customName || this.renderDisplayLabel(target);
+        const sources = this.renderDOMSemanticSources(target);
+        const axLabel = "AXTree (browser-computed)";
+        const [axSummary = `${axLabel}: not recorded.`, ...axContext] = this.buildAXLines(action.accessibility, axLabel);
+        const targetDetails = [axSummary];
+        if (customName) {
+          const originalName = this.renderName(target);
+          const from = originalName ? JSON.stringify(originalName) : "(unnamed in DOM)";
+          targetDetails.push(`User modified name: ${from} -> ${JSON.stringify(customName)} (user-provided alias, may differ from the actual page name).`);
+        }
         return {
-          desc: this.uiText("stepClick", [this.renderDisplayLabel(target)], `点击：${this.renderDisplayLabel(target)}`),
-          detail: `click ${tag}${semantic ? ` -> ${semantic}` : ""}${frameNote}`,
-          context: this.buildContextLines(target, !!semantic, hasTarget)
+          desc: this.uiText("stepClick", [displayName], `点击：${displayName}`),
+          summary: displayName,
+          detail: `click DOM ${tag}${semantic ? ` -> ${semantic} (DOM sources: ${sources})` : ""}${frameNote}`,
+          targetDetails,
+          context: [...axContext, ...this.buildContextLines(target, !!semantic, hasTarget)]
+        };
+      }
+
+      case "browserDialog": {
+        const kind = this.clean(action.dialogType || "unknown", 24);
+        const message = this.clean(action.dialogMessage, 180);
+        const outcomes = {
+          accepted: ["dialogAccepted", "已确认"],
+          dismissed: ["dialogDismissed", "已取消"]
+        };
+        const outcome = outcomes[action.dialogResult];
+        const status = outcome ? this.uiText(outcome[0], [], outcome[1]) : this.uiText("dialogResultUnknown", [], "未记录处理结果");
+        const result = outcome ? action.dialogResult : "response not recorded";
+        return {
+          desc: `${kind}${message ? `：“${message}”` : ""} · ${status}`,
+          detail: `browser dialog ${kind} ${JSON.stringify(action.dialogMessage || "")} -> ${result}`,
+          context: typeof action.dialogInput === "string" ? [`prompt input: ${JSON.stringify(action.dialogInput)}`] : []
         };
       }
 
@@ -195,7 +256,7 @@ const StepDocGenerator = {
         const value = this.escapeString(action.value || "");
         return {
           desc: this.uiText("stepType", [this.renderDisplayLabel(target), value], `在 ${this.renderDisplayLabel(target)} 中输入“${value}”`),
-          detail: `type ${tag} -> "${value}"${frameNote}`,
+          detail: `type ${tag} -> ${JSON.stringify(String(action.value ?? ""))}${frameNote}`,
           context: this.buildContextLines(target, !!semantic, hasTarget)
         };
       }
@@ -303,23 +364,7 @@ const StepDocGenerator = {
   },
 
   /**
-   * The handle a click opened, or "" when it was opened but never used.
-   *
-   * Handles are allocated on first use in the order the tabs report, so the page
-   * that click opened is the next one that has not appeared yet. Inferring it
-   * here rather than storing a tab id on the step keeps a browser-session value
-   * out of the recording: the ids mean nothing once the recording is read back.
-   */
-  nextNewPageName(actions, fromIndex, seenPages) {
-    for (let index = fromIndex + 1; index < actions.length; index++) {
-      const name = actions[index].pageName || "page1";
-      if (!seenPages.has(name)) return name;
-    }
-    return "";
-  },
-
-  /**
-   * Collects the distinct pages in action order, each with every URL it visited.
+   * Collects the pages used by steps and any opened pages without steps.
    *
    * A page handle is bound to the tab, not to the document: redirects, reloads
    * and in-app navigation do not allocate a new one. Keeping only the first URL
@@ -352,6 +397,12 @@ const StepDocGenerator = {
           last.url = url;
           last.title = last.title || title;
         }
+      }
+    }
+    for (const action of actions) {
+      const name = action.openedPageName;
+      if (name && !map.has(name)) {
+        map.set(name, { name, visits: [{ url: action.openedPageUrl || "", title: "" }] });
       }
     }
     return Array.from(map.values());
@@ -405,6 +456,18 @@ const StepDocGenerator = {
     return "";
   },
 
+  renderDOMSemanticSources(target) {
+    const sources = [];
+    if (target.role) sources.push(`role=${this.clean(target.roleSource, 40) || "not recorded"}`);
+    if (this.renderName(target)) {
+      const source = this.clean(target.accessibleName, 80)
+        ? this.clean(target.accessibleNameSource, 40) || "not recorded"
+        : "element text";
+      sources.push(`name=${source}`);
+    }
+    return sources.join(", ");
+  },
+
   /** Returns a short, localized target label for the UI. */
   renderDisplayLabel(target) {
     const roleLabels = {
@@ -449,6 +512,7 @@ const StepDocGenerator = {
       navigate: ["actionNavigate", "打开页面"],
       newPage: ["actionNewPage", "子页面"],
       click: ["actionClick", "点击"],
+      browserDialog: ["actionBrowserDialog", "浏览器弹窗"],
       type: ["actionType", "输入"],
       select: ["actionSelect", "选择"],
       pressKey: ["actionPressKey", "按键"],
@@ -511,10 +575,9 @@ const StepDocGenerator = {
 
     if (includeDom) {
       const skeleton = this.renderDomSkeleton(target);
-      if (skeleton.length > 0) {
-        lines.push("dom context:");
-        lines.push(...skeleton);
-      }
+      const levels = skeleton.length - 1;
+      const order = levels ? "outermost first, +1 = direct parent" : "target only";
+      lines.push(`dom context: ${levels} ancestor level${levels === 1 ? "" : "s"} captured (${order})`, ...skeleton);
     }
 
     return lines;
@@ -522,12 +585,15 @@ const StepDocGenerator = {
 
   /**
    * Renders the DOM skeleton around the target: the ancestor chain
-   * (outermost first, up to 5 levels) as opening tags, then the target's
-   * own HTML marked with <!-- target -->.
+   * (outermost first, up to 5 levels) as opening tags with their distance
+   * above the target, then the target's own HTML marked with <!-- target -->.
    */
   renderDomSkeleton(target) {
     const chain = (target.parentChain || []).slice().reverse(); // outermost first
-    const lines = chain.map((p, i) => "  ".repeat(i) + (p.openTag || `<${p.tagName || "div"}>`));
+    const lines = chain.map((parent, index) => {
+      const tag = parent.openTag || `<${parent.tagName || "div"}>`;
+      return `${"  ".repeat(index)}${tag}  <!-- ancestor +${chain.length - index} -->`;
+    });
 
     const indent = "  ".repeat(chain.length);
     const snapshot = this.clean(target.outerHTML || this.renderTag(target), 321);

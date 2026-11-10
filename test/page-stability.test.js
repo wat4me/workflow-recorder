@@ -10,7 +10,9 @@ function harness() {
   let loading = false;
   let onSleep = () => {};
   const listeners = new Map();
-  const indicator = { isConnected: true, tagName: "DIV", classList: [], getBoundingClientRect: () => ({ width: 10, height: 10 }) };
+  const indicator = { isConnected: true, tagName: "DIV", classList: [],
+    matches: selector => selector.includes("aria-busy"),
+    getBoundingClientRect: () => ({ width: 10, height: 10 }) };
   const context = {
     Symbol, Date: { now: () => now },
     setTimeout(callback, delay) {

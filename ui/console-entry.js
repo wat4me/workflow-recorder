@@ -19,7 +19,6 @@ import "./lib/capture-state.js";
 import "./app/step-view.js";
 import "./app/step-media.js";
 import "./app/case-folders.js";
-import "./app/console-image-preview.js";
 import "./app/console-preview.js";
 import "./app/case-workbench.js";
 import "./console.js";

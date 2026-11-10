@@ -92,8 +92,10 @@
         resolve(result);
       };
       const onKeyDown = event => {
+        // Escape cancels. Enter is left to the focused button: the default focus
+        // is Cancel, so a global Enter handler used to confirm the very deletion
+        // the user was backing out of.
         if (event.key === "Escape") finish(false);
-        if (event.key === "Enter") finish(true);
       };
 
       cancelButton.addEventListener("click", () => finish(false));
@@ -138,6 +140,7 @@
     confirmText = t("confirm", [], "确认"),
     value = "",
     maxLength = 120,
+    multiline = false,
     selection = null,
     validate = null,
     checkbox = null
@@ -153,7 +156,7 @@
             <p id="prompt-message"></p>
             ${value === null ? "" : `<label class="recording-name-field">
               <span></span>
-              <input type="text" autocomplete="off">
+              ${multiline ? '<textarea rows="4" spellcheck="false"></textarea>' : '<input type="text" autocomplete="off">'}
             </label>`}
             ${checkbox ? `<label class="capture-screenshots-toggle">
               <input type="checkbox" id="export-include-screenshots" aria-describedby="prompt-checkbox-hint">
@@ -173,7 +176,7 @@
       messageEl.hidden = !message;
       overlay.querySelector(".confirm-submit").textContent = confirmText;
 
-      const input = overlay.querySelector('input[type="text"]');
+      const input = overlay.querySelector('input[type="text"], textarea');
       const checkboxInput = overlay.querySelector('input[type="checkbox"]');
       if (checkboxInput) checkboxInput.checked = checkbox.checked;
       const error = document.createElement("p");
@@ -184,7 +187,7 @@
       if (input) {
         overlay.querySelector(".recording-name-field span").textContent = label || title;
         input.value = value;
-        limitNameInput(input, maxLength);
+        if (maxLength !== null) limitNameInput(input, maxLength);
         error.id = "prompt-validation-error";
         error.className = "prompt-validation-error";
         error.setAttribute("role", "alert");
@@ -212,7 +215,7 @@
         resolve(result);
       };
       const submit = () => {
-        const text = input?.value.trim() ?? "";
+        const text = (multiline ? input?.value : input?.value.trim()) ?? "";
         const message = validate?.(text, picker?.value);
         if (message) {
           error.textContent = message;
@@ -229,7 +232,7 @@
         // button Enter belongs to that button, and an IME composition keeps its
         // Enter for itself.
         if (event.key === "Escape" && !event.isComposing) finish(null);
-        if (event.key === "Enter" && !event.isComposing && event.target === input) {
+        if (!multiline && event.key === "Enter" && !event.isComposing && event.target === input) {
           event.preventDefault();
           submit();
         }
@@ -306,8 +309,12 @@
         resolve(result);
       };
       const onKeyDown = event => {
-        if (event.key === "Escape") finish(null);
-        if (event.key === "Enter") finish({ action: "save", name: input.value.trim() });
+        // Escape cancels and Enter saves only from the name field, so the other
+        // two buttons keep the action their label promises.
+        if (event.key === "Escape" && !event.isComposing) finish(null);
+        if (event.key === "Enter" && !event.isComposing && event.target === input) {
+          finish({ action: "save", name: input.value.trim() });
+        }
       };
 
       overlay.querySelector(".confirm-cancel").addEventListener("click", () => finish(null));

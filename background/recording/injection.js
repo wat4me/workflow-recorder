@@ -54,22 +54,33 @@ export async function ensurePageFitScript(tabId) {
   });
 }
 
-/**
- * Injects the recorder into every frame of a tab and confirms it responds.
- *
- * A child tab may still expose an about:blank document when onCreated fires, so
- * the whole batch is retried rather than assumed to have landed.
- */
-export async function ensureContentScripts(tabId, maxAttempts = 5) {
+export async function injectRecordingScripts(tabId, recordNavigate = false, maxAttempts = 5) {
+  const generation = recordingGeneration;
+  const isCurrent = () => recordingEnabled && generation === recordingGeneration;
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       if (attempt > 1) await wait(100 * attempt);
+      if (!isCurrent()) return false;
+      let frames = [];
       for (const files of INJECTION_BATCHES) {
-        await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files });
+        frames = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files });
       }
-      await chrome.tabs.sendMessage(tabId, { action: MESSAGE.pingRecorder });
-      console.log(`[Background] Content scripts ready in tab ${tabId}`);
+      if (!isCurrent()) return false;
+      // A popup can navigate between ping and start. Target the document we
+      // injected and retry the full handshake if that document disappears.
+      const topFrame = frames?.find(frame => frame.frameId === 0);
+      const topTarget = frameTarget(topFrame || { frameId: 0 });
+      await chrome.tabs.sendMessage(tabId, { action: MESSAGE.pingRecorder }, topTarget);
+      if (!isCurrent()) return false;
+      const start = { action: MESSAGE.startRecording, recordNavigate };
+      await chrome.tabs.sendMessage(tabId, start, topTarget);
+      if (!isCurrent()) return false;
+      // A departing iframe cannot invalidate the top page. New frame
+      // documents are picked up by webNavigation's frame injection.
+      await Promise.allSettled((frames || []).filter(frame => frame.frameId !== 0)
+        .map(frame => chrome.tabs.sendMessage(tabId, start, frameTarget(frame))));
+      console.log(`[Background] Recording started in tab ${tabId}`);
       return true;
     } catch (error) {
       lastError = error;
@@ -79,13 +90,8 @@ export async function ensureContentScripts(tabId, maxAttempts = 5) {
   throw lastError || new Error(`Unable to inject recording scripts into tab ${tabId}`);
 }
 
-export async function injectRecordingScripts(tabId, recordNavigate = false, maxAttempts = 5) {
-  const generation = recordingGeneration;
-  if (!recordingEnabled) return false;
-  await ensureContentScripts(tabId, maxAttempts);
-  if (!recordingEnabled || generation !== recordingGeneration) return false;
-  await chrome.tabs.sendMessage(tabId, { action: MESSAGE.startRecording, recordNavigate });
-  console.log(`[Background] Recording started in tab ${tabId}`);
+function frameTarget(frame) {
+  return frame.documentId ? { documentId: frame.documentId } : { frameId: frame.frameId };
 }
 
 /**

@@ -16,7 +16,7 @@
   ];
   const framePrimerMarker = Symbol.for("workflow-recorder.screencast-frame-primer");
 
-  function create() {
+  function create({ beforeInteraction } = {}) {
     let effectVersion = 0;
     let waitGeneration = 0;
     const debug = globalThis.WorkflowRecorderProtocol;
@@ -147,6 +147,7 @@
     const onInteraction = event => {
       if (event.isTrusted) {
         lastChangeAt = Date.now();
+        beforeInteraction?.();
         interruptClicks("next-interaction");
       }
     };
@@ -208,18 +209,29 @@
       return `${tag}${id}${classes}`;
     }
 
+    const combinedLoadingSelector = [
+      '[aria-busy="true"]', '[data-loading="true"]', '[data-busy="true"]',
+      '[role="progressbar"]', "progress",
+      ...knownLoadingSelectors
+    ].join(", ");
+
+    /**
+     * One tree walk per poll instead of one per selector. Tier order is
+     * unchanged: any visible explicit signal, then an incomplete progress
+     * element, then the known business loaders in list order.
+     */
     function getLoadingIndicator() {
-      const explicit = Array.from(document.querySelectorAll(
-        '[aria-busy="true"], [data-loading="true"], [data-busy="true"]'
-      )).find(isVisible);
+      const visible = Array.from(document.querySelectorAll(combinedLoadingSelector)).filter(isVisible);
+      const explicit = visible.find(element =>
+        element.matches('[aria-busy="true"], [data-loading="true"], [data-busy="true"]'));
       if (explicit) return { kind: "explicit", selector: describe(explicit) };
 
-      const progress = Array.from(document.querySelectorAll('[role="progressbar"], progress'))
-        .find(element => isVisible(element) && isIncompleteProgress(element));
+      const progress = visible.find(element =>
+        element.matches('[role="progressbar"], progress') && isIncompleteProgress(element));
       if (progress) return { kind: "progress", selector: describe(progress) };
 
       for (const selector of knownLoadingSelectors) {
-        const element = Array.from(document.querySelectorAll(selector)).find(isVisible);
+        const element = visible.find(candidate => candidate.matches(selector));
         if (element) return { kind: "known", selector };
       }
       return null;
@@ -296,6 +308,7 @@
       },
       start: startEffectTracking,
       stop: stopEffectTracking,
+      confirmClickInputClear: clickEffects.confirmInputClear,
       waitForClickEffect,
       waitForPageStable
     };

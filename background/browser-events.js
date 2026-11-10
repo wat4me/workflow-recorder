@@ -60,9 +60,20 @@ export function registerBrowserEventHandlers({
       type: "tab-created",
       tabId: tab.id,
       windowId: tab.windowId,
-      openerTabId: tab.openerTabId
+      openerTabId: tab.openerTabId,
+      url: tab.pendingUrl || tab.url
     });
     queueTabRegistration(() => scope.registerDescendantTab(tab)).catch(() => {});
+  });
+
+  chrome.webNavigation.onCreatedNavigationTarget?.addListener(({ sourceTabId, tabId, url }) => {
+    // This event can identify the opener even when the new window's Tab has
+    // no openerTabId (for example, an openerless link).
+    scope.noteBrowserChange({ type: "tab-created", tabId, openerTabId: sourceTabId, url });
+    queueTabRegistration(async () => {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (tab) await scope.registerDescendantTab({ ...tab, openerTabId: sourceTabId });
+    }).catch(() => {});
   });
 
   chrome.windows.onCreated.addListener(window => {

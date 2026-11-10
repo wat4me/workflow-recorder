@@ -288,7 +288,7 @@ function createTabScreenshotManager({ t, queueAction, screencast, mediaStore, de
         return { success: false, error: t("errorNoStepForScreenshot", [], "当前页面没有可绑定截图的步骤") };
       }
       const actions = await actionStore.readActions();
-      const action = [...actions].reverse().find(item => item.pageName === pageName);
+      const action = [...actions].reverse().find(item => item.pageName === pageName && item.type !== "browserDialog");
       if (!action?.id) {
         return { success: false, error: t("errorNoStepForScreenshot", [], "当前页面没有可绑定截图的步骤") };
       }

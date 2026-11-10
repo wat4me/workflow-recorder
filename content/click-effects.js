@@ -3,6 +3,17 @@
   if (globalThis.RecorderClickEffects) return;
   const WINDOW_MS = 1200;
 
+  /**
+   * The element whose checked state a click toggles, for a checkbox, radio or
+   * the label that wraps one. Null for everything else.
+   */
+  function checkableTargetOf(target) {
+    const candidate = target?.tagName?.toUpperCase?.() === "LABEL" && target.control ? target.control : target;
+    const tag = candidate?.tagName?.toUpperCase?.();
+    const type = String(candidate?.getAttribute?.("type") || "").toLowerCase();
+    return tag === "INPUT" && (type === "checkbox" || type === "radio") ? candidate : null;
+  }
+
   function create({ onFinish }) {
     const observations = new Map();
     let active = null;
@@ -17,6 +28,16 @@
       if (!observation || observation.done) return;
       observation.done = true;
       clearTimeout(observation.timer);
+      if (observation.checkable) {
+        observation.checkable.removeEventListener?.("change", observation.onCheckedChange);
+        // Backstop for an interrupt that beat the change event: compare the
+        // state directly before the observation is sealed.
+        if (!changed && !!observation.checkable.checked !== observation.checkedBefore) {
+          changed = true;
+          reason = "checked-changed";
+        }
+        observation.checkable = null;
+      }
       observation.result = { changed, reason, observedAt: Date.now(),
         interrupted: reason === "next-interaction" || reason === "viewport-resize" };
       onFinish?.(observation, evidence);
@@ -29,14 +50,23 @@
 
     function begin(id, target, baseline) {
       interrupt("next-interaction");
+      const checkable = checkableTargetOf(target);
       const observation = { id, target, baseline, startedAt: Date.now(), deadline: Date.now() + WINDOW_MS,
         viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
         strong: !!globalThis.RecorderTargeting?.hasClickSemantics(target),
+        // A toggle's effect is its state: the checked property changes without
+        // any MutationRecord, so the change event and this snapshot are the
+        // only evidence a checkbox or radio click can produce.
+        checkable, checkedBefore: checkable ? !!checkable.checked : false,
         visibility: new Map(), waiters: [], done: false };
       for (let element = target; element && element !== document.body && element !== document.documentElement; element = element.parentElement) {
         observation.visibility.set(element, visibility(element));
       }
       observation.timer = setTimeout(() => finish(observation, false, "timeout"), WINDOW_MS);
+      if (checkable) {
+        observation.onCheckedChange = () => finish(observation, true, "checked-changed");
+        checkable.addEventListener("change", observation.onCheckedChange, { once: true });
+      }
       observations.set(id, observation);
       active = observation;
       while (observations.size > 64) observations.delete(observations.keys().next().value);
@@ -83,6 +113,16 @@
 
     function interrupt(reason = "next-interaction") { finish(active, false, reason); }
 
+    function confirmInputClear(id) {
+      const observation = observations.get(id);
+      if (!observation) return false;
+      if (Date.now() > observation.deadline || window.innerWidth !== observation.viewportWidth ||
+          window.innerHeight !== observation.viewportHeight) return false;
+      if (observation.done) return observation.result.changed;
+      finish(observation, true, "input-cleared");
+      return true;
+    }
+
     function wait(id) {
       const observation = observations.get(id);
       if (!observation) return Promise.resolve({ changed: false, reason: "unknown-click" });
@@ -90,7 +130,7 @@
       return new Promise(resolve => observation.waiters.push(resolve));
     }
 
-    return { begin, observe, interrupt, wait, stop: () => { interrupt("stopped"); observations.clear(); } };
+    return { begin, observe, interrupt, confirmInputClear, wait, stop: () => { interrupt("stopped"); observations.clear(); } };
   }
 
   globalThis.RecorderClickEffects = { create };

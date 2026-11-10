@@ -11,6 +11,7 @@ import "./lib/folder-picker.js";
 import "./lib/dialogs.js";
 import "./lib/step-display-settings.js";
 import "./lib/settings-dialog.js";
+import { bindThemeToggle } from "./lib/theme.js";
 import "./lib/consent.js";
 import "./lib/archive-stream.js";
 import "./lib/export.js";
@@ -18,4 +19,11 @@ import "./lib/image-preview.js";
 import "./lib/capture-state.js";
 import "./app/step-view.js";
 import "./app/recorder-panel.js";
+import { createRecordingPages } from "./app/recording-pages.js";
 import "./popup.js";
+
+document.addEventListener("DOMContentLoaded", async () => {
+  await window.RecorderI18n.ready;
+  bindThemeToggle(document.getElementById("theme-toggle-btn"));
+  createRecordingPages();
+});

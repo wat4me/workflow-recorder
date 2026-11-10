@@ -29,10 +29,6 @@ export function attachFolders(ctx) {
     }
     return ancestors;
   }
-  function folderPath(folderId) {
-    return folderAncestors(folderId).map(folder => folder.name).join(" / ")
-      || t("unfiledCases", [], "未分类");
-  }
   function descendantIds(folderId) {
     const result = new Set([folderId]);
     let changed = true;
@@ -431,7 +427,7 @@ export function attachFolders(ctx) {
   }
 
   Object.assign(ctx, {
-    folderName, folderPath, folderAncestors, descendantIds, flattenedFolders, updateFolderVisibility, addFolderToggle,
+    folderName, folderAncestors, descendantIds, flattenedFolders, updateFolderVisibility, addFolderToggle,
     expandFolderAncestors, folderMoveTargets, updateFolder, closeFolderMenu, showFolderMenu,
     createFolder, buildFolderItem, renderFolders, showMoveDialog
   });

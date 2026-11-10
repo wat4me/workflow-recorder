@@ -33,6 +33,7 @@ export const CAPTURE_INTENT = {
 export const SCREENSHOT_SKIPPED_REASON = {
   /** The click opened a child page, which is captured on its own first frame. */
   opensChildPage: "opens-child-page",
+  browserDialog: "browser-dialog",
   /** The recording was started with screenshots turned off. */
   captureDisabled: "capture-disabled"
 };

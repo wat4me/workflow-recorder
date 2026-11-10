@@ -1,3 +1,5 @@
+import { readTheme, THEME_KEY } from "./theme.js";
+
 /**
  * Recording settings dialog.
  *
@@ -17,10 +19,11 @@
    */
   async function openCaptureSettings() {
     const { EXPORT_SCREENSHOTS_KEY, readIncludeScreenshots } = globalThis.RecorderExport;
-    const [current, storedDisplay, includeScreenshots] = await Promise.all([
+    const [current, storedDisplay, includeScreenshots, theme] = await Promise.all([
       settings.readCaptureSettings(),
       chrome.storage.local.get(displaySettings.STEP_DISPLAY_SETTINGS_KEY),
-      readIncludeScreenshots()
+      readIncludeScreenshots(),
+      readTheme()
     ]);
     const currentDisplay = displaySettings.normalize(storedDisplay[displaySettings.STEP_DISPLAY_SETTINGS_KEY]);
     return new Promise(resolve => {
@@ -30,6 +33,13 @@
         <div class="confirm-dialog capture-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-settings-title">
           <div class="confirm-content">
             <h3 id="capture-settings-title">${escapeHtml(t("captureSettingsTitle", [], "录制设置"))}</h3>
+            <label class="recording-name-field">
+              <span>${escapeHtml(t("themeLabel", [], "界面主题"))}</span>
+              <select id="ui-theme">
+                <option value="light">${escapeHtml(t("themeLight", [], "浅色"))}</option>
+                <option value="dark">${escapeHtml(t("themeDark", [], "深色"))}</option>
+              </select>
+            </label>
             <p id="capture-settings-message">${escapeHtml(t(
               "captureSettingsMessage",
               [],
@@ -84,6 +94,8 @@
       expandedToggle.checked = currentDisplay.screenshotsExpanded;
       const exportToggle = overlay.querySelector("#export-screenshots-enabled");
       exportToggle.checked = includeScreenshots;
+      const themeSelect = overlay.querySelector("#ui-theme");
+      themeSelect.value = theme;
       for (const [id, action] of [["export-recording-debug", "exportRecordingDebug"], ["clear-recording-debug", "clearRecordingDebug"]]) {
         const button = overlay.querySelector(`#${id}`);
         button?.addEventListener("click", async () => {
@@ -111,7 +123,8 @@
           if (saved) await chrome.storage.local.set({
             [settings.CAPTURE_SETTINGS_KEY]: settings.normalizeCaptureSettings({ screenshots: toggle.checked }),
             [displaySettings.STEP_DISPLAY_SETTINGS_KEY]: displaySettings.normalize({ screenshotsExpanded: expandedToggle.checked }),
-            [EXPORT_SCREENSHOTS_KEY]: exportToggle.checked
+            [EXPORT_SCREENSHOTS_KEY]: exportToggle.checked,
+            ...(themeSelect.value !== theme ? { [THEME_KEY]: themeSelect.value } : {})
           });
           document.removeEventListener("keydown", onKeyDown);
           overlay.remove();
@@ -124,7 +137,7 @@
       };
       const onKeyDown = event => {
         if (event.key === "Escape") finish(false);
-        if (event.key === "Enter" && !event.target?.closest?.(".recording-debug-tools")) finish(true);
+        if (event.key === "Enter" && !event.target?.closest?.("select, .recording-debug-tools")) finish(true);
       };
 
       overlay.querySelector(".confirm-cancel").addEventListener("click", () => finish(false));

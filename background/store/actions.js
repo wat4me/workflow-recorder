@@ -40,11 +40,14 @@ export async function readAction(id) {
   return stored[storageKey(id)] || null;
 }
 
-export async function appendAction(action) {
-  const order = await readOrder();
+export async function appendAction(action, extraWrites = {}, { beforeActionId } = {}) {
+  const order = (await readOrder()).filter(id => id !== action.id);
+  const beforeIndex = beforeActionId ? order.indexOf(beforeActionId) : -1;
+  order.splice(beforeIndex < 0 ? order.length : beforeIndex, 0, action.id);
   await chrome.storage.local.set({
+    ...extraWrites,
     [storageKey(action.id)]: action,
-    [ORDER_KEY]: [...order.filter(id => id !== action.id), action.id]
+    [ORDER_KEY]: order
   });
 }
 
@@ -58,12 +61,12 @@ export async function appendAction(action) {
  * left `screenshotError: null` behind would still look like a step that had
  * failed at some point.
  */
-export async function patchAction(id, patch, { remove = [] } = {}) {
+export async function patchAction(id, patch, { remove = [], extraWrites = {} } = {}) {
   const current = await readAction(id);
   if (!current) return null;
   const next = { ...current, ...patch };
   for (const field of remove) delete next[field];
-  await chrome.storage.local.set({ [storageKey(id)]: next });
+  await chrome.storage.local.set({ ...extraWrites, [storageKey(id)]: next });
   // The record as it was. Callers test it for truthiness to detect a step that
   // was deleted mid-flight; a screenshot rebind also needs the key it replaced,
   // and reading it here saves that caller a second lookup.
@@ -79,7 +82,7 @@ export async function patchAction(id, patch, { remove = [] } = {}) {
  * and the new record go out together; the old record is dropped afterwards, so an
  * interruption leaves an unreferenced record rather than a gap in the list.
  */
-export async function replaceActionId(previousId, nextAction) {
+export async function replaceActionId(previousId, nextAction, extraWrites = {}) {
   const order = await readOrder();
   const index = order.indexOf(previousId);
   if (index === -1 || !nextAction?.id) return false;
@@ -87,6 +90,7 @@ export async function replaceActionId(previousId, nextAction) {
   const nextOrder = [...order];
   nextOrder[index] = nextAction.id;
   await chrome.storage.local.set({
+    ...extraWrites,
     [storageKey(nextAction.id)]: nextAction,
     [ORDER_KEY]: nextOrder
   });

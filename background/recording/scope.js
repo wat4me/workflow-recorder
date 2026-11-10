@@ -32,19 +32,29 @@ export function createRecordingScope({ screencast }) {
   }
 
   function noteBrowserChange(change) {
-    recentBrowserChanges.push({ time: Date.now(), ...change });
     const cutoff = Date.now() - CHANGE_RETENTION_MS;
     while (recentBrowserChanges[0]?.time < cutoff) recentBrowserChanges.shift();
+    const previous = change.type === "tab-created" && Number.isInteger(change.tabId)
+      ? recentBrowserChanges.find(item => item.type === change.type && item.tabId === change.tabId)
+      : null;
+    if (previous) {
+      previous.openerTabId = change.openerTabId ?? previous.openerTabId;
+      previous.windowId = change.windowId ?? previous.windowId;
+      if (change.url && change.url !== "about:blank") previous.url = change.url;
+      return;
+    }
+    recentBrowserChanges.push({ time: Date.now(), ...change });
   }
 
   /**
-   * Correlates a click with a tab or window that appeared right after it.
-   * Prefers a tab opened by this exact tab, then falls back to any new window,
+   * Correlates a click with a tab, window or native dialog that appeared right after it.
+   * Prefers changes tied to this exact tab, then falls back to any new window,
    * because a popup opened via window.open carries no openerTabId.
    */
   function findBrowserContextChange(openerTabId, clickAt) {
     const recentChanges = recentBrowserChanges.filter(change => change.time >= clickAt - 50);
-    return [...recentChanges].reverse().find(change => change.openerTabId === openerTabId)
+    return recentChanges.find(change => change.openerTabId === openerTabId && change.time >= clickAt)
+      || recentChanges.find(change => change.type === "javascript-dialog" && change.tabId === openerTabId && change.time >= clickAt)
       || [...recentChanges].reverse().find(change => change.type === "window-created")
       || null;
   }
@@ -55,7 +65,7 @@ export function createRecordingScope({ screencast }) {
     let windowChange = null;
     while (Date.now() < deadline) {
       const change = findBrowserContextChange(openerTabId, clickAt);
-      if (change?.openerTabId === openerTabId) return change;
+      if (change?.openerTabId === openerTabId || change?.type === "javascript-dialog") return change;
       if (change) windowChange = change;
       if (windowChange && Date.now() - startedAt >= 160) return windowChange;
       await wait(40);
@@ -197,11 +207,24 @@ export function createRecordingScope({ screencast }) {
     await injectRecordingScripts(tab.id, false).catch(error => {
       console.warn(`[Background] Child tab ${tab.id} will be retried after navigation:`, error.message);
     });
+    await startTabCapture(tab.id);
+  }
+
+  async function startTabCapture(tabId) {
     // Share the session transport for AX; image streaming still follows the plan.
     const capturePlan = await readRecordingCapturePlan();
-    screencast.start(tab.id, capturePlan).catch(error => {
-      console.warn(`[Screencast] Failed to start for child tab ${tab.id}:`, error.message);
+    screencast.start(tabId, capturePlan).catch(error => {
+      console.warn(`[Screencast] Failed to start for recording tab ${tabId}:`, error.message);
     });
+  }
+
+  async function prepareJoinedTab(tabId, expectedUrl) {
+    const { isRecording, recordingTabIds } = await readScope();
+    if (!isRecording) return false;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!isRecordableTab(tab) || tab.url !== expectedUrl) return false;
+    if (!recordingTabIds.includes(tabId)) await injectRecordingScripts(tabId, false, 2);
+    return true;
   }
 
   /** Drops a closed tab from the scope. No-ops when it was never tracked. */
@@ -226,10 +249,12 @@ export function createRecordingScope({ screencast }) {
     isInScope,
     isRecordableTab,
     noteBrowserChange,
+    prepareJoinedTab,
     readScope,
     registerDescendantTab,
     resolveInitialTab,
     resumeTabs,
+    startTabCapture,
     waitForBrowserContextChange
   };
 }

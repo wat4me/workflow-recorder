@@ -75,6 +75,10 @@ export function createCaseManager({
         });
       }
     });
+    for (const action of actions) {
+      const name = action.openedPageName;
+      if (name && !pagesByName.has(name)) pagesByName.set(name, { name, url: action.openedPageUrl || "", title: "" });
+    }
     return Array.from(pagesByName.values());
   }
 

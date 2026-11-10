@@ -24,18 +24,19 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
   }
 
   /**
-   * Assigns the page handle for a tab, creating one if it has not reported before.
+   * Resolves handles for the action and any page it opened in one mapping write.
    */
-  async function resolvePageName(senderTab, tabsMapping, nextPageNumber) {
-    const existing = tabsMapping[senderTab.id];
-    if (existing) return existing;
-
-    const pageName = `page${nextPageNumber}`;
-    tabsMapping[senderTab.id] = pageName;
-    await chrome.storage.local.set({ tabsMapping, nextPageNumber: nextPageNumber + 1 });
-    console.log(`[Background] Assigned pageName "${pageName}" to tab ${senderTab.id}`);
-
-    return pageName;
+  async function resolvePageNames(tabIds, tabsMapping, nextPageNumber) {
+    let changed = false;
+    const names = tabIds.map(tabId => {
+      if (tabsMapping[tabId]) return tabsMapping[tabId];
+      changed = true;
+      const name = `page${nextPageNumber++}`;
+      tabsMapping[tabId] = name;
+      return name;
+    });
+    if (changed) await chrome.storage.local.set({ tabsMapping, nextPageNumber });
+    return names;
   }
 
   /**
@@ -69,8 +70,7 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       ...(willCapture ? pendingCaptureFields() : {})
     };
 
-    const targetId = await applyStepChange(lastAction, changes);
-    await chrome.storage.local.set({ activeCaseId: null });
+    const targetId = await applyStepChange(lastAction, changes, { activeCaseId: null });
     if (willCapture) screenshots.schedule(targetId, senderTab, lastAction.type, payload.frameId ? payload.timestamp : 0);
     return true;
   }
@@ -89,10 +89,10 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
    * Returns the id the change landed on, which the caller needs because it may no
    * longer be the id it passed in.
    */
-  async function applyStepChange(action, changes) {
+  async function applyStepChange(action, changes, extraWrites = {}) {
     const origin = await readOrigin();
     if (!isInheritedStep(origin, action.id)) {
-      await actionStore.patchAction(action.id, changes);
+      await actionStore.patchAction(action.id, changes, { extraWrites });
       return action.id;
     }
 
@@ -107,9 +107,9 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     // The screenshot key comes along, so the card keeps showing the image while the
     // re-capture runs. The re-capture writes a new key rather than overwriting it,
     // so the case this step came from keeps its own screenshot.
-    const replaced = await actionStore.replaceActionId(action.id, copy);
+    const replaced = await actionStore.replaceActionId(action.id, copy, extraWrites);
     if (!replaced) {
-      await actionStore.patchAction(action.id, changes);
+      await actionStore.patchAction(action.id, changes, { extraWrites });
       return action.id;
     }
     console.log(`[Background] Copied inherited step ${action.id} to ${copy.id} before editing it.`);
@@ -130,7 +130,8 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       : write();
   }
 
-  async function logUnlocked(payload, senderTab, { beforeFrameData = null, frameId = 0, documentId = null } = {}) {
+  async function logUnlocked(payload, senderTab, { beforeFrameData = null, frameId = 0, documentId = null,
+    beforeActionId, openedTab } = {}) {
     if (!senderTab) return;
     // Browser-provided identity prevents identical paths in different documents
     // from being folded together. Do not trust identity supplied by the page.
@@ -160,16 +161,25 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     }
     const capturePlan = recordingCapturePlanFor(data);
 
-    payload.pageName = await resolvePageName(
-      senderTab,
-      data.tabsMapping || {},
-      data.nextPageNumber || 1
-    );
+    const tabIds = openedTab ? [senderTab.id, openedTab.tabId] : [senderTab.id];
+    const [pageName, openedPageName] = await resolvePageNames(tabIds, data.tabsMapping || {}, data.nextPageNumber || 1);
+    payload.pageName = pageName;
+    if (openedPageName) {
+      payload.openedPageName = openedPageName;
+      if (Number.isInteger(openedTab.windowId) && Number.isInteger(senderTab.windowId)) {
+        payload.openedPageKind = openedTab.windowId === senderTab.windowId ? "tab" : "window";
+      }
+      if (/^(https?|file):/i.test(openedTab.url || "")) payload.openedPageUrl = openedTab.url;
+    }
 
     if (payload.type === "type" && await mergeIntoPrecedingType(payload, senderTab)) return;
     if (isLifecycle && !(await isOpeningLifecycleStep(payload))) {
       console.log(`[Background] Filtering out non-opening ${payload.type} for ${payload.pageName}`);
       return;
+    }
+    if (payload.type === "pressKey") {
+      const change = scope.findBrowserContextChange?.(senderTab.id, payload.timestamp);
+      if (change?.type === "javascript-dialog") beforeActionId = change.actionId;
     }
 
     // Capture state is part of the step's first write, not a follow-up patch: the
@@ -211,18 +221,20 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     }
 
     try {
-      await actionStore.appendAction(payload);
+      // Clearing the saved-case baseline rides along with the step write: an
+      // action change invalidates it, and a second write per step was the only
+      // thing keeping the two apart.
+      await actionStore.appendAction(payload, { activeCaseId: null }, { beforeActionId });
     } catch (error) {
       // The blob landed but no step can reference it. Use the same reference-aware
       // cleanup path as deletion so a coincident saved-case write cannot lose media.
       if (beforeKey) await mediaCleanup.deleteUnreferenced([beforeKey]);
       throw error;
     }
-    await chrome.storage.local.set({ activeCaseId: null });
     // Top-document observers cannot see input/click events inside an iframe.
     // Keep a quiet boundary for those actions even if the outer page is idle.
     if (willCapture) screenshots.schedule(payload.id, senderTab, payload.type, frameId ? payload.timestamp : 0);
-    console.log(`[Background] Action saved. Total actions: ${await actionStore.countActions()}`);
+    console.debug("[Background] Action saved:", payload.type);
   }
 
   /**
@@ -355,6 +367,9 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     }
 
     if (!interrupted) browserContextChange ||= scope.findBrowserContextChange(senderTab.id, clickAt);
+    if (!interrupted && request.expectNewPage && !browserContextChange && timeRemaining() > 0) {
+      browserContextChange = await scope.waitForBrowserContextChange(senderTab.id, clickAt, Math.min(timeRemaining(), 200));
+    }
     if (Number.isFinite(browserContextChange?.time) && browserContextChange.time > validationDeadline) browserContextChange = null;
     // A final snapshot can annotate a frame close when DOM evidence won the
     // race. Keep this browser query bounded too, including for forced clicks.
@@ -392,13 +407,23 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     // about the flow rather than about a screenshot, so it gets its own field --
     // the exported document needs it to name the handle the next steps run on.
     const commit = async (payload = request.payload) => {
-      if (browserContextChange) {
+      if (browserContextChange && browserContextChange.type !== "javascript-dialog") {
         payload.screenshotSkippedReason = SCREENSHOT_SKIPPED_REASON.opensChildPage;
         payload.openedChildPage = true;
       }
       if (sourceFrameChange === "removed") payload.frameClosedAfterClick = true;
       if (sourceFrameChange === "navigated") payload.frameNavigatedAfterClick = true;
-      await log(payload, senderTab, { beforeFrameData, frameId: sender.frameId, documentId: sender.documentId });
+      // CDP can deliver the dialog event before the content-script message.
+      const beforeActionId = browserContextChange?.type === "javascript-dialog" ? browserContextChange.actionId : undefined;
+      let openedTab;
+      if (browserContextChange?.type === "tab-created" && Number.isInteger(browserContextChange.tabId)) {
+        const { tabId, windowId, url } = browserContextChange;
+        const openedUrl = /^(https?|file):/i.test(url || "") ? url : null;
+        const tab = Number.isInteger(windowId) && openedUrl ? null : await chrome.tabs.get(tabId).catch(() => null);
+        openedTab = { tabId, windowId: windowId ?? tab?.windowId, url: openedUrl || tab?.pendingUrl || tab?.url };
+      }
+      await log(payload, senderTab, { beforeFrameData, frameId: sender.frameId, documentId: sender.documentId,
+        beforeActionId, openedTab });
       debugDecision("recorded", { domChanged, navigated, browserContextChange: !!browserContextChange, sourceFrameChange,
         forced: !!request.forceValid, forcedReason: request.forceValid
           ? (payload.target?.tagName === "canvas" ? "canvas" : payload.target?.tagName === "a" ? "hyperlink" : "file-input-or-explicit-handler") : null });
@@ -406,6 +431,46 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
       return { success: true };
     };
     return options.deferCommit ? { success: true, commit } : commit();
+  }
+
+  async function setDialogResult(actionId, dialogResult, input) {
+    const changes = { dialogResult };
+    if (typeof input === "string") changes.dialogInput = input;
+    if (await actionStore.patchAction(actionId, changes, { extraWrites: { activeCaseId: null } })) notifyStepsUpdated();
+  }
+
+  async function renameClickTarget(actionId, name) {
+    if (typeof name !== "string" || name.length > 120) {
+      return { success: false, error: t("invalidClickTargetName", [], "名称最多可输入 120 个字符") };
+    }
+    const action = typeof actionId === "string" ? await actionStore.readAction(actionId) : null;
+    if (action?.type !== "click") {
+      return { success: false, error: t("errorStepNotFound", [], "步骤不存在") };
+    }
+
+    const customTargetName = name.replace(/\s+/g, " ").trim();
+    if (customTargetName === (action.customTargetName || "")) return { success: true };
+
+    // This label annotates the recorded click. Keep its id so a screenshot
+    // already queued for this step can still attach to it.
+    const previous = await actionStore.patchAction(actionId, customTargetName ? { customTargetName } : {}, {
+      remove: customTargetName ? [] : ["customTargetName"],
+      extraWrites: { activeCaseId: null }
+    });
+    if (!previous) return { success: false, error: t("errorStepNotFound", [], "步骤不存在") };
+    notifyStepsUpdated();
+    return { success: true };
+  }
+
+  async function editInputValue(actionId, value) {
+    const action = typeof actionId === "string" ? await actionStore.readAction(actionId) : null;
+    if (action?.type !== "type" || typeof value !== "string") {
+      return { success: false, error: t("errorStepNotFound", [], "步骤不存在") };
+    }
+    if (action.value === value) return { success: true };
+    await applyStepChange(action, { value }, { activeCaseId: null });
+    notifyStepsUpdated();
+    return { success: true };
   }
 
   async function deleteStep(index) {
@@ -446,5 +511,5 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     };
   }
 
-  return { deleteStep, deleteSteps, log, logClick };
+  return { renameClickTarget, editInputValue, deleteStep, deleteSteps, log, logClick, setDialogResult };
 }
