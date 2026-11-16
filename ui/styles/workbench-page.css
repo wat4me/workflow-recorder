@@ -62,13 +62,10 @@ button.library-path-part:focus-visible { outline: 2px solid var(--accent-color);
 .library-head-actions { margin-left: auto; gap: 10px; }
 .case-search-field { width: min(260px, 22vw); background: var(--bg-secondary); }
 .case-search-group > select { background: var(--bg-secondary); font-size: 11px; }
-.library-head-actions .btn { font-size: 12px; padding-inline: 12px; }
 .library-actionbar { flex-wrap: wrap; min-height: 44px; padding: 6px 18px; gap: 12px; background: var(--bg-primary); }
 .library-selection { font-size: 11px; }
 .library-move-actions { margin-left: auto; }
 .library-actions { gap: 6px; }
-.library-actions .btn, .library-move-actions .btn { min-height: 30px; padding: 6px 10px; font-size: 11px; }
-.library-actionbar:not(.has-selection) .btn { box-shadow: none; background: var(--bg-secondary); color: var(--text-muted); border-color: var(--border-color); opacity: .6; }
 .library-actionbar.has-selection { background: var(--bg-list-selection); }
 .case-library-list { padding: 6px 10px; }
 .library-item, .library-folder-item {

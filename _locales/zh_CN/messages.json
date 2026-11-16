@@ -45,6 +45,9 @@
   "folderDragHint": { "message": "拖到其他目录可移入，拖到此标题可移回根目录。最多支持三级。" },
   "moveFolderHint": { "message": "选择「$NAME$」的新父目录，子文件夹和用例会一起移动。", "placeholders": { "name": { "content": "$1" } } },
   "folderUpdated": { "message": "文件夹已更新" },
+  "folderCreated": { "message": "文件夹已创建" },
+  "folderDeleted": { "message": "文件夹已删除" },
+  "noRecordablePages": { "message": "没有可录制的网页。请先在浏览器中打开要录制的 http 或 https 页面。" },
   "updateFolderFailed": { "message": "更新文件夹失败" },
   "errorInvalidFolderUpdate": { "message": "文件夹更新参数无效" },
   "errorFolderMoveCycle": { "message": "不能将文件夹移入自身或其子文件夹" },
@@ -122,6 +125,7 @@
   "selectedStepCount": { "message": "已选择 $COUNT$ 个步骤", "placeholders": { "count": { "content": "$1" } } },
   "selectStep": { "message": "选择第 $STEP$ 个步骤", "placeholders": { "step": { "content": "$1" } } },
   "selectPageSteps": { "message": "选择 $PAGE$ 的所有步骤", "placeholders": { "page": { "content": "$1" } } },
+  "recordingTabNumber": { "message": "标签页 $NUMBER$", "placeholders": { "number": { "content": "$1" } } },
   "collapsePageSteps": { "message": "折叠 $1（$2 步）" },
   "expandPageSteps": { "message": "展开 $1（$2 步）" },
   "deleteSelectedSteps": { "message": "删除所选" },
@@ -178,9 +182,6 @@
   "expandStepScreenshots": { "message": "展开截图（$1）" },
   "collapseStepScreenshots": { "message": "收起截图（$1）" },
   "captureSettingsTitle": { "message": "录制设置" },
-  "themeLabel": { "message": "界面主题" },
-  "themeLight": { "message": "浅色" },
-  "themeDark": { "message": "深色" },
   "switchToLightTheme": { "message": "切换到浅色模式" },
   "switchToDarkTheme": { "message": "切换到深色模式" },
   "captureSettingsMessage": { "message": "步骤截图是录制里最占资源的部分。这里的取舍只影响截图，不影响操作步骤的记录。" },
@@ -368,6 +369,7 @@
   "copyForAI": { "message": "复制给AI" },
   "copyTaskCopied": { "message": "任务说明已复制" },
     "continueRecordingReady": { "message": "已加载用例，请在目标页面侧边栏中继续录制" },
+    "continueRecordingOpenPanel": { "message": "用例已加载。请到目标页面点击扩展图标，打开侧边栏继续录制。" },
     "currentWindow": { "message": "当前窗口" },
     "otherWindow": { "message": "窗口 $WINDOW$", "placeholders": { "window": { "content": "$1" } } },
     "remove": { "message": "移除" },
@@ -376,4 +378,122 @@
     "selectTargetPage": { "message": "选择继续录制的页面" },
     "selectTargetPageHint": { "message": "请选择要打开侧边栏并继续录制的页面。" },
     "targetPageUnavailable": { "message": "目标页面已关闭或不可录制，请重新选择" },
-    "untitledPage": { "message": "未命名页面" }}
+    "untitledPage": { "message": "未命名页面" },
+    "intentGoal": { "message": "测试目标" },
+    "intentChecks": { "message": "验证点" },
+    "intentReplaceable": { "message": "可替换项" },
+    "intentCoverage": { "message": "覆盖情况" },
+    "intentOutOfScope": { "message": "本次不验证" },
+    "intentPreconditions": { "message": "前置条件" },
+    "intentOpenQuestions": { "message": "待确认" },
+    "intentStepHeading": { "message": "测试步骤 $STEP$", "placeholders": { "step": { "content": "$1" } } },
+    "intentStepNote": { "message": "注意事项" },
+    "intentStepSkipped": { "message": "不参与测试" },
+    "intentAnnotationTitle": { "message": "标注意图" },
+    "intentAnnotationHint": { "message": "标注由测试者填写，用来说明每个测试步骤验证什么。" },
+    "intentStepSplit": { "message": "测试步骤划分" },
+    "intentInsertStep": { "message": "在此插入测试步骤" },
+    "intentNoSteps": { "message": "还没有划分测试步骤" },
+    "intentStepTitleLabel": { "message": "阶段名称" },
+    "intentStepTitlePlaceholder": { "message": "示例：选择关联文档" },
+    "intentStepNoteLabel": { "message": "注意事项" },
+    "intentStepNotePlaceholder": { "message": "示例：附件超过 15MB 会被拒绝" },
+    "intentStepChecksLabel": { "message": "验证点" },
+    "intentStepChecksPlaceholder": { "message": "示例：保存后列表出现关联文档（每行一个）" },
+    "intentStepIgnoreLabel": { "message": "不参与测试" },
+    "intentGoalPlaceholder": { "message": "示例：验证关联文档的上传与回显" },
+    "intentChecksPlaceholder": { "message": "示例：保存后列表出现关联文档（每行一个）" },
+    "intentReplaceablePlaceholder": { "message": "哪些东西换成别的也行" },
+    "intentCoveragePlaceholder": { "message": "同一个用例要试哪几种情况" },
+    "intentOutOfScopePlaceholder": { "message": "哪些结果这次不追究" },
+    "intentPreconditionsPlaceholder": { "message": "示例：普通成员已登录；目标项目有文档" },
+    "intentStepPreconditionsPlaceholder": { "message": "示例：已登录，且已打开目标页面（每行一个）" },
+    "intentOpenQuestionsPlaceholder": { "message": "还没想清楚的点" },
+    "intentMissingGoal": { "message": "还没有填写测试目的" },
+    "intentDuplicateBoundary": { "message": "同一个位置放了两个测试步骤，请合并" },
+    "intentPassCriteria": { "message": "通过标准" },
+    "intentPassCriteriaPlaceholder": { "message": "示例：刷新后关联关系仍在" },
+    "intentStepPassPlaceholder": { "message": "示例：上传成功的文件能被正常读取（每行一个）" },
+    "intentPurpose": { "message": "目的" },
+    "intentStepPurposeLabel": { "message": "本段目的" },
+    "intentStepPurposePlaceholder": { "message": "示例：确认选择、保存、回显都正常" },
+    "intentCheckOnSkippedStep": { "message": "标记为“不参与测试”的步骤里填了测试目标、前置条件、验证点或通过标准" },
+    "intentSave": { "message": "保存标注" },
+    "intentSaved": { "message": "已保存标注" },
+    "intentSaveFailed": { "message": "保存标注失败" },
+    "intentActionsChanged": { "message": "录制步骤已变化，请重新打开标注后再试" },
+    "intentChanged": { "message": "标注已更新，请重新打开后再试" },
+    "intentUnannotatedSteps": { "message": "未标注的录制步骤" },
+    "intentManage": { "message": "查看标注" },
+    "intentPendingRange": { "message": "等待录制" },
+    "intentRangeInvalidShort": { "message": "范围无效" },
+    "intentSplitHelp": { "message": "所选范围会使用新标注，原分段中位于其后的录制步骤可另行标注。" },
+    "intentSaving": { "message": "正在保存…" },
+    "intentPreviewEmpty": { "message": "选择录制范围，为一组操作填写测试目标和验证点。" },
+    "intentExtraDetails": { "message": "补充说明" },
+    "intentExtraCount": { "message": "已填 $COUNT$ 项", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "errorCaseReadFailed": { "message": "用例读取失败" }
+  ,
+    "intentSaveAnyway": { "message": "仍然保存" }
+  ,
+    "intentStepRange": { "message": "第 $FROM$–$TO$ 步", "placeholders": { "from": { "content": "$1" }, "to": { "content": "$2" } } }
+  ,
+    "intentStepRangeEmpty": { "message": "空段" }
+  ,
+    "intentStepRangeHint": { "message": "录制范围" }
+  ,
+    "intentInsertStepAfter": { "message": "在其后插入测试步骤" }
+  ,
+    "intentStepStart": { "message": "起始步" }
+  ,
+    "edit": { "message": "编辑" }
+  ,
+    "intentSummarySteps": { "message": "已划分 $COUNT$ 个测试步骤", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "intentSummaryChecks": { "message": "$COUNT$ 个验证点", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "intentSummaryPending": { "message": "$COUNT$ 个等待录制", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "intentOptional": { "message": "（可选）" }
+  ,
+    "intentFocusedTitle": { "message": "编辑测试步骤 $STEP$", "placeholders": { "step": { "content": "$1" } } }
+  ,
+    "intentFocusedHint": { "message": "这里只编辑这一步。" }
+  ,
+    "intentNote": { "message": "用例说明" }
+  ,
+    "intentNotePlaceholder": { "message": "这份用例整体在测什么，一句话即可" }
+  ,
+    "intentStepEnd": { "message": "结束步" }
+  ,
+    "intentSummaryNoNote": { "message": "还没有填写测试目标" }
+  ,
+    "intentAllStepsAnnotated": { "message": "录制步骤已全部标注。" }
+  ,
+  "intentPickHint": {"message": "在左侧点击起始步和结束步，或按住鼠标拖选；按住 Shift 点击可扩展范围。"},
+  "intentOverlapDiscardTitle": {"message": "覆盖已有标注"},
+  "intentOverlapDiscardMessage": {"message": "所选范围包含$STEPS$。保存后，这些测试步骤原有的标注会被丢弃。", "placeholders": {"steps": {"content": "$1"}}},
+  "intentOverlapItem": {"message": "「$NAME$」（第 $FROM$–$TO$ 步）", "placeholders": {"name": {"content": "$1"}, "from": {"content": "$2"}, "to": {"content": "$3"}}},
+  "intentOverlapDiscardContinue": {"message": "继续选择"},
+  "intentOverlapDiscardSave": {"message": "丢弃并保存"},
+  "listSeparator": {"message": "、"},
+  "intentAnnotateRange": {"message": "标注第 $FROM$–$TO$ 步", "placeholders": {"from": {"content": "$1"}, "to": {"content": "$2"}}},
+  "intentAnnotateStep": {"message": "标注第 $STEP$ 步", "placeholders": {"step": {"content": "$1"}}},
+  "intentAnnotateGapHint": {"message": "包含中间未勾选的步骤"},
+    "intentOverlap": { "message": "两个测试步骤覆盖了同一步，请调整起止位置" }
+  ,
+    "intentNewStep": { "message": "新增测试步骤" }
+  ,
+    "intentAddStepHint": { "message": "为第 $FROM$–$TO$ 步新建一条意图标注；调整结束位置即可在这里切分。", "placeholders": { "from": { "content": "$1" }, "to": { "content": "$2" } } }
+  ,
+    "intentStepEndHeading": { "message": "测试步骤 $STEP$ 结束", "placeholders": { "step": { "content": "$1" } } }
+  ,
+    "intentRangeInvalid": { "message": "结束步骤不能早于开始步骤" }
+  ,
+    "intentSplitStepHint": { "message": "全部步骤都已标注；这里从第 $FROM$–$TO$ 步切出一段新步骤，其余步骤留待下次标注。", "placeholders": { "from": { "content": "$1" }, "to": { "content": "$2" } } }
+  ,
+    "intentSplitStep": { "message": "切出新测试步骤" }
+  ,
+    "intentEmptySplit": { "message": "新分段还没有填写内容，保存会清空原有标注；请先填写内容" }
+  }

@@ -25,10 +25,6 @@
   min-width: 0;
 }
 
-.case-action-buttons .btn {
-  padding-inline: 8px;
-  font-size: 12px;
-}
 
 .copy-task-control .tooltip-content {
   top: calc(100% + 9px);

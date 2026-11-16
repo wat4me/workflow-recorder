@@ -10,6 +10,8 @@
  * so binding a screenshot writes one action and appending writes one action
  * plus a list of ids. Readers still get a plain ordered array.
  */
+import { INTENT_KEY, intentAfterRemoval } from "./intent.js";
+
 const ORDER_KEY = "actionOrder";
 const ACTION_PREFIX = "action:";
 
@@ -115,33 +117,43 @@ export async function replaceActions(actions, extraWrites = {}) {
 }
 
 export async function clearActions() {
-  await replaceActions([]);
+  await replaceActions([], { [INTENT_KEY]: null });
 }
 
 /** Removes one action by position, returning it so callers can free its media. */
-export async function removeActionAt(index) {
+export async function removeActionAt(index, extraWrites = {}) {
   const order = await readOrder();
   if (!Number.isInteger(index) || index < 0 || index >= order.length) return null;
 
-  const [removedId] = order.splice(index, 1);
-  const removed = await readAction(removedId);
-  await chrome.storage.local.set({ [ORDER_KEY]: order });
-  await chrome.storage.local.remove(storageKey(removedId));
-  return removed;
+  const [removed] = await removeFromOrder(order, new Set([order[index]]), extraWrites);
+  return removed || null;
 }
 
 /** Removes several actions by id behind one order update. */
-export async function removeActions(actionIds) {
+export async function removeActions(actionIds, extraWrites = {}) {
   const ids = new Set((actionIds || []).filter(Boolean));
   if (ids.size === 0) return [];
 
-  const order = await readOrder();
-  const removedIds = order.filter(id => ids.has(id));
+  return removeFromOrder(await readOrder(), ids, extraWrites);
+}
+
+async function removeFromOrder(order, ids, extraWrites) {
+  const positions = [];
+  const remaining = order.filter((id, index) => {
+    if (!ids.has(id)) return true;
+    positions.push(index);
+    return false;
+  });
+  const removedIds = positions.map(index => order[index]);
   if (removedIds.length === 0) return [];
-  const stored = await chrome.storage.local.get(removedIds.map(storageKey));
-  await chrome.storage.local.set({ [ORDER_KEY]: order.filter(id => !ids.has(id)) });
-  await chrome.storage.local.remove(removedIds.map(storageKey));
-  return removedIds.map(id => stored[storageKey(id)]).filter(Boolean);
+  const keys = removedIds.map(storageKey);
+  const [stored, annotation] = await Promise.all([
+    chrome.storage.local.get(keys),
+    intentAfterRemoval(positions, order.length)
+  ]);
+  await chrome.storage.local.set({ ...extraWrites, ...annotation, [ORDER_KEY]: remaining });
+  await chrome.storage.local.remove(keys);
+  return keys.map(key => stored[key]).filter(Boolean);
 }
 
 /**

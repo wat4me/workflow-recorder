@@ -272,6 +272,41 @@ test("inactive draft frames survive reference-aware cleanup but clearing the liv
   assert.equal(h.data.activeRecordingDraftId, a.draftId);
 });
 
+test("screenshot cleanup preserves archives from older annotations", async () => {
+  await setup();
+  const { createMediaCleanupManager } = await import("../background/store/media-cleanup.js");
+  const deleted = [];
+  const cleanup = createMediaCleanupManager({ mediaStore: {
+    getAllKeys: async () => ["intent-pool-old", "intent-pool:archive", "orphan-screenshot"],
+    deleteBlobs: async removed => deleted.push(...removed)
+  } });
+  await cleanup.deleteUnreferenced(["intent-pool-old", "intent-pool:archive"]);
+  await cleanup.cleanupOrphans({ force: true });
+  assert.deepEqual(deleted, ["orphan-screenshot"]);
+});
+
+test("scoped reads pair actions and annotations from the same inactive draft", async () => {
+  const h = await setup();
+  const first = await h.drafts.activate(1);
+  await h.actions.appendAction({ id: "a" });
+  h.data.workspaceIntent = { steps: [{ start: 1, end: 1, goal: "Goal A" }] };
+  const second = await h.drafts.activate(2);
+  await h.actions.appendAction({ id: "b" });
+  h.data.workspaceIntent = { steps: [{ start: 1, end: 1, goal: "Goal B" }] };
+  const { createApplicationRoutes } = await import("../background/routes.js");
+  const routes = createApplicationRoutes({
+    actionStore: h.actions, drafts: h.drafts, queueAction: fn => fn(), queueRecordingTransition: fn => fn()
+  });
+  const snapshot = await routes.getActions({ scopeTabId: 1, workspaceDraftId: first.draftId, includeIntent: true });
+  assert.equal(snapshot.actions[0].id, "a");
+  assert.equal(snapshot.intent.steps[0].goal, "Goal A");
+  await assert.rejects(routes.getActions({
+    scopeTabId: 1, workspaceDraftId: second.draftId, includeIntent: true
+  }), /草稿已切换/);
+  await assert.rejects(routes.saveIntent({ workspaceDraftId: first.draftId, intent: snapshot.intent }), /草稿已切换/);
+  assert.equal(h.data.workspaceIntent.steps[0].goal, "Goal B");
+});
+
 test("recovery counts nonempty unsaved recordings and excludes saved baselines", async () => {
   const h = await setup({ caseIndex: [{ id: "saved-a" }] });
   const a = await h.drafts.activate(1);

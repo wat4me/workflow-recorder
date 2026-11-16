@@ -474,10 +474,9 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
   }
 
   async function deleteStep(index) {
-    const removed = await actionStore.removeActionAt(index);
+    const removed = await actionStore.removeActionAt(index, { activeCaseId: null });
     if (!removed) return { success: false, error: t("errorStepNotFound", [], "步骤不存在") };
 
-    await chrome.storage.local.set({ activeCaseId: null });
     // Runs after the step is out of the workspace, so the reference check sees
     // the list this deletion produced rather than the one before it. Both of the
     // step's frames are offered up.
@@ -493,12 +492,11 @@ export function createActionLog({ t, scope, screenshots, mediaCleanup, notifySte
     if (ids.length === 0) {
       return { success: false, error: t("errorNoStepsToDelete", [], "请选择要删除的步骤") };
     }
-    const removed = await actionStore.removeActions(ids);
+    const removed = await actionStore.removeActions(ids, { activeCaseId: null });
     if (removed.length === 0) {
       return { success: false, error: t("errorStepNotFound", [], "步骤不存在") };
     }
 
-    await chrome.storage.local.set({ activeCaseId: null });
     const cleanup = await mediaCleanup.deleteUnreferenced(removed.flatMap(action => [
       action.screenshotKey,
       action.screenshotBeforeKey

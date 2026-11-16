@@ -92,7 +92,7 @@ export function createMediaCleanupManager({ mediaStore }) {
    * from stale data. Run it after the index and workspace writes have landed.
    */
   async function deleteUnreferenced(candidateKeys) {
-    const candidates = [...new Set((candidateKeys || []).filter(Boolean))];
+    const candidates = [...new Set((candidateKeys || []).filter(key => key && !caseStore.isIntentPoolKey(key)))];
     if (candidates.length === 0) return { deletedCount: 0, pending: false };
     const retained = await referencedKeys();
     return deleteWithRetry(candidates.filter(key => !retained.has(key)));
@@ -109,16 +109,18 @@ export function createMediaCleanupManager({ mediaStore }) {
       return { deletedCount: 0, pending: false, skipped: true };
     }
 
+    // Read live references before enumerating blobs. All production media
+    // publishers share the cleanup lock, so the references stay valid here.
     const retained = await referencedKeys();
-    const stalePendingKeys = pendingKeys.filter(key => retained.has(key));
-    if (stalePendingKeys.length > 0) {
-      await chrome.storage.local.set({
-        [PENDING_KEY]: pendingKeys.filter(key => !retained.has(key))
-      });
-    }
     const storedKeys = await mediaStore.getAllKeys();
-    const orphanKeys = [...new Set([...storedKeys.filter(key => !retained.has(key)), ...pendingKeys])]
-      .filter(key => !retained.has(key));
+    // Older profiles may still hold user-uploaded archives from annotation.
+    const orphanKeys = [...new Set([...storedKeys, ...pendingKeys])]
+      .filter(key => !retained.has(key) && !caseStore.isIntentPoolKey(key));
+    const orphanSet = new Set(orphanKeys);
+    const remainingPending = pendingKeys.filter(key => orphanSet.has(key));
+    if (remainingPending.length !== pendingKeys.length) {
+      await chrome.storage.local.set({ [PENDING_KEY]: remainingPending });
+    }
     const result = await deleteWithRetry(orphanKeys);
     await chrome.storage.local.set({ [LAST_CLEANUP_KEY]: Date.now() });
     return result;

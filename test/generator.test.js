@@ -482,3 +482,146 @@ test("the card label and the exported document name an element the same way", ()
   assert.equal(generator.renderSemantic(target), '"新建事项"');
   assert.equal(generator.describeStep({ type: "click", target }).desc, "点击：“新建事项”");
 });
+
+function fakeActions(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    type: "click",
+    timestamp: index + 1,
+    url: "https://example.test/flow",
+    target: fakeTarget({ accessibleName: `按钮${index + 1}` })
+  }));
+}
+
+function fakeIntent() {
+  return {
+    steps: [
+      {
+        id: "s1", title: "", start: 1, end: 2,
+        goal: "进入任务模式", checks: ["进入工作台"], note: ""
+      },
+      {
+        id: "s2",
+        title: "上传本地文件",
+        start: 3,
+        end: 4,
+        goal: "任务模式下能上传并读取本地文件",
+        checks: ["附件名称出现在已发送区", "回答卡片进入完成态"],
+        note: "先试小图，再试大图"
+      }
+    ]
+  };
+}
+
+test("one section per test step makes up the document", () => {
+  const generator = loadGenerator();
+  const doc = generator.generate(fakeActions(4), fakeIntent());
+
+  const at = text => doc.indexOf(text);
+  // The test steps appear in recorded order, each with its own goal.
+  assert.doesNotMatch(doc, /## 测试目标/);
+  assert.ok(at("## 测试步骤 1") > 0);
+  assert.ok(at("## 测试步骤 2：上传本地文件") > at("## 测试步骤 1"));
+  assert.match(doc, /## 测试步骤 1\n测试目标：进入任务模式\n验证点：\n- 进入工作台/);
+  assert.match(doc, /## 测试步骤 2：上传本地文件\n测试目标：任务模式下能上传并读取本地文件\n验证点：\n- 附件名称出现在已发送区\n- 回答卡片进入完成态\n注意事项：先试小图，再试大图/);
+  // Atomic steps and their evidence keep their own numbering and position.
+  assert.ok(at("1. [page1]") > at("## 测试步骤 1"));
+  assert.ok(at("3. [page1]") > at("## 测试步骤 2"));
+  assert.match(doc, /^1\. \[page1\]/m);
+  // Nothing case-level is repeated: the annotation lives on the steps.
+  assert.doesNotMatch(doc, /## 测试目的|## 验证点|## 可替换项/);
+});
+
+test("a legacy case-level goal becomes the first test step's goal", () => {
+  const generator = loadGenerator();
+  const doc = generator.generate(fakeActions(2), {
+    goal: "旧版整份用例的目标",
+    steps: [{ id: "s1", start: 1, end: 2, checks: ["进入工作台"] }]
+  });
+  assert.doesNotMatch(doc, /## 测试目标/);
+  assert.match(doc, /## 测试步骤 1\n测试目标：旧版整份用例的目标\n验证点：\n- 进入工作台/);
+});
+
+test("an unannotated case exports exactly what it exported before", () => {
+  const generator = loadGenerator();
+  const actions = fakeActions(3);
+  assert.equal(generator.generate(actions), generator.generate(actions, null));
+  assert.equal(generator.generate(actions), generator.generate(actions, {}));
+  assert.doesNotMatch(generator.generate(actions), /用例说明|验证点|测试步骤/);
+});
+
+test("a closed annotation ends before the next unannotated operation", () => {
+  const generator = loadGenerator();
+  const actions = Array.from({ length: 4 }, () => ({ type: "click", target: fakeTarget() }));
+  const intent = { steps: [
+    { start: 1, end: 1, goal: "First operation" },
+    { start: 4, end: 4, goal: "Last operation" }
+  ] };
+  const structure = generator.generate(actions, intent).split("\n")
+    .filter(line => /^## |^\d+\./.test(line))
+    .map(line => line.replace(/^(\d+\.).*/, "$1"));
+  assert.deepEqual(structure, [
+    "## 测试步骤 1", "1.", "## 未标注的录制步骤", "2.", "3.", "## 测试步骤 2", "4."
+  ]);
+});
+
+test("a test step inserted at the end stays out of the document until it owns a step", () => {
+  const generator = loadGenerator();
+  const intent = {
+    note: "有说明",
+    steps: [
+      { id: "first", start: 1, end: 3, open: true, checks: ["进入工作台"] },
+      { id: "end", start: 4, end: 3, open: true, checks: ["收尾"] }
+    ]
+  };
+  const doc = generator.generate(fakeActions(3), intent);
+  // Three actions, so the fourth test step starts one past the recording: it is
+  // a plan for steps not recorded yet, and neither its heading nor its
+  // verification point leaks into the document.
+  assert.doesNotMatch(doc, /收尾/);
+  assert.doesNotMatch(doc, /## 测试步骤 2/);
+  assert.match(doc, /## 测试步骤 1/);
+
+  // Once one more step is recorded it belongs to the test step and appears.
+  const grown = generator.generate(fakeActions(4), intent);
+  assert.match(grown, /## 测试步骤 2[\s\S]*收尾/);
+});
+
+test("step annotations export without retired data rules or file pools", () => {
+  const generator = loadGenerator();
+  const intent = {
+    steps: [{
+      id: "s1",
+      title: "关联文档",
+      start: 1,
+      end: 2,
+      goal: "验证关联文档可以被选择",
+      purpose: "确认选择、保存、回显都正常",
+      preconditions: ["普通成员", "目标项目有文档"],
+      checks: ["列表出现文件名"],
+      pass: ["刷新后关联仍在"],
+      note: "等待 toast 消失再刷新",
+      dataValues: [
+        { id: "d1", field: "标题", control: "input", rule: "测试文档_${日期}" },
+        { id: "d2", field: "合同.pdf", control: "upload", rule: "" }
+      ],
+      filePool: {
+        zipName: "关联文档-files.zip",
+        poolKey: "pool-key",
+        files: [
+          { name: "normal.pdf", type: "PDF", size: 12 * 1024 * 1024 },
+          { name: "sign.jpg", type: "JPG", size: 800 * 1024 }
+        ],
+        totalSize: 12 * 1024 * 1024 + 800 * 1024
+      }
+    }]
+  };
+
+  const doc = generator.generate(fakeActions(2), intent);
+  assert.doesNotMatch(doc, /## 测试目标/);
+  assert.doesNotMatch(doc, /## 前置条件/);
+  assert.doesNotMatch(doc, /## 通过标准/);
+  assert.match(doc, /## 测试步骤 1：关联文档\n测试目标：验证关联文档可以被选择\n前置条件：\n- 普通成员\n- 目标项目有文档\n目的：确认选择、保存、回显都正常/);
+  assert.doesNotMatch(doc, /数据取值|测试文件池|fixtures|normal\.pdf/);
+  assert.match(doc, /验证点：\n- 列表出现文件名\n通过标准：\n- 刷新后关联仍在/);
+  assert.match(doc, /注意事项：等待 toast 消失再刷新/);
+});

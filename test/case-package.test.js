@@ -149,6 +149,44 @@ test("a validation failure rolls back streamed media staged before the manifest"
   assert.equal(harness.importedCases(), null);
 });
 
+test("older case packages keep annotations and screenshots while skipping retired data rules and archives", async () => {
+  const poolBytes = fflate.zipSync({ "fixture.txt": fflate.strToU8("test input") });
+  const screenshot = new Uint8Array([1, 2, 3]);
+  const path = "workflow-recorder-case-package.json";
+  const harness = loadPackage();
+  const annotation = { id: "test-step", start: 1, end: 1, goal: "Upload a file", checks: ["The file appears"] };
+  const step = {
+    ...annotation,
+    dataValues: [{ id: "upload", field: "Attachment", control: "upload", rule: "" }],
+    filePool: { poolAsset: "pool", zipName: "fixture.zip" }
+  };
+  const source = { id: "parent", name: "Parent", actions: [{ id: "a", screenshotAsset: "shot" }],
+    pages: [], intent: { steps: [step] } };
+  const manifest = {
+    format: "workflow-recorder-case-package", version: 1, cases: [source],
+    assets: [
+      { id: "pool", path: "media/pool.zip", type: "application/zip", size: poolBytes.length },
+      { id: "shot", path: "media/shot.jpg", type: "image/jpeg", size: screenshot.length }
+    ]
+  };
+  const oldPackage = fflate.zipSync({
+    "media/pool.zip": [poolBytes, { level: 0 }],
+    "media/shot.jpg": screenshot,
+    [path]: fflate.strToU8(JSON.stringify(manifest))
+  });
+  await harness.api.importCasePackage(new Blob([oldPackage]));
+  const [imported] = harness.importedCases();
+  assert.deepEqual(imported.intent.steps, [annotation]);
+  assert.deepEqual([...harness.storedMedia.keys()], [imported.actions[0].screenshotKey]);
+
+  const exportHarness = loadPackage(new Map(harness.storedMedia));
+  const archive = await exportHarness.api.buildCasePackage([{ ...imported, intent: source.intent }]);
+  const files = fflate.unzipSync(archive);
+  const exported = JSON.parse(fflate.strFromU8(files[path]));
+  assert.deepEqual(exported.cases[0].intent.steps, [annotation]);
+  assert.deepEqual(exported.assets.map(asset => asset.type), ["image/jpeg"]);
+});
+
 test("buildCasePackage returns the archive without starting a browser download", async () => {
   const harness = loadPackage();
   const archive = await harness.api.buildCasePackage([{

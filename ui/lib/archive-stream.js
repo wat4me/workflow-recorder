@@ -25,6 +25,7 @@
         await yieldUI();
       }
       if (!size) entry.push(new Uint8Array(0), true);
+      if (failure) throw failure;
     }
     function finish() {
       zip.end();

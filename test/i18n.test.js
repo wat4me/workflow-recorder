@@ -8,11 +8,22 @@ const zh = JSON.parse(fs.readFileSync(path.join(root, "_locales", "zh_CN", "mess
 const en = JSON.parse(fs.readFileSync(path.join(root, "_locales", "en", "messages.json"), "utf8"));
 
 test("Chinese and English locales expose the same messages", () => {
-  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort());
-  assert.equal(zh.noSteps.message, "暂无录制步骤。");
+  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort());  assert.equal(zh.noSteps.message, "暂无录制步骤。");
   assert.equal(en.noSteps.message, "No steps recorded yet.");
   assert.equal(zh.workspace.message, "工作台");
   assert.equal(en.workspace.message, "Workspace");
+});
+
+test("every locale entry is a plain non-empty string, as Chrome requires", () => {
+  // Chrome refuses to load the whole extension when one entry is malformed, and
+  // the failure surfaces only as "extension did not load" in the browser. This
+  // was found the hard way.
+  for (const [name, locale] of [["zh_CN", zh], ["en", en]]) {
+    for (const [key, entry] of Object.entries(locale)) {
+      assert.equal(typeof entry.message, "string", `${name}.${key} is not a string`);
+      assert.ok(entry.message.trim(), `${name}.${key} is empty`);
+    }
+  }
 });
 
 test("public AI copy instructions do not require internal skills", () => {

@@ -146,6 +146,14 @@
 .step-card.has-selection {
   --step-connector-left: 40px;
 }
+/* A selection with holes annotates first to last checked step; the unchecked
+   steps it includes get a lighter, dashed tint than the checked ones. */
+.steps-container.has-range-gaps .step-card.is-intent-highlighted:not(.is-selected) {
+  border-style: dashed;
+  border-color: var(--accent-subtle);
+  background: var(--bg-list-hover);
+  box-shadow: inset 3px 0 var(--accent-subtle);
+}
 
 .step-select-checkbox {
   /* Align the leading controls to the header, not the full card height. */
@@ -154,7 +162,27 @@
 
 @media (max-width: 380px) {
   .steps-section-head {
-    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .steps-section-head .step-batch-actions,
+  .steps-section-head .steps-section-title {
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .steps-section-head .step-batch-actions {
+    flex-wrap: nowrap;
+  }
+
+  .steps-section-title h2 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .steps-section-head .step-list-actions > button {
+    padding-inline: 6px;
   }
 }
 
@@ -522,8 +550,9 @@
   gap: 0;
 }
 
-.steps-container.steps-compact > .step-card {
-  --step-page-color: var(--accent-color);
+.steps-container.steps-compact .step-card {
+  --step-page-color: hsl(var(--step-page-hue) 58% 34%);
+  --step-page-label-color: color-mix(in srgb, var(--step-page-color) 70%, var(--text-primary));
   display: grid;
   grid-template-columns: 14px minmax(20px, max-content) minmax(0, 1fr);
   align-items: center;
@@ -536,31 +565,38 @@
   box-shadow: none;
 }
 
-.steps-compact > .step-card[data-page-tone="1"] { --step-page-color: #0f766e; }
-.steps-compact > .step-card[data-page-tone="2"] { --step-page-color: #0369a1; }
-.steps-compact > .step-card[data-page-tone="3"] { --step-page-color: #92400e; }
-:root[data-theme="dark"] .step-card[data-page-tone="1"] { --step-page-color: #78dccc; }
-:root[data-theme="dark"] .step-card[data-page-tone="2"] { --step-page-color: #8acfff; }
-:root[data-theme="dark"] .step-card[data-page-tone="3"] { --step-page-color: #f5cb85; }
+:root[data-theme="dark"] .steps-container.steps-compact .step-card {
+  --step-page-color: hsl(var(--step-page-hue) 72% 75%);
+}
 
-.steps-compact > .step-card::before {
+.steps-compact .step-card::before,
+.steps-compact > .step-card > .step-page-heading:not([hidden])::before {
   content: "";
   position: absolute;
-  inset: 0 auto -1px 0;
+  inset: 3px auto 3px 0;
   width: 2px;
-  background: color-mix(in srgb, var(--step-page-color) 30%, var(--bg-secondary));
+  border-radius: 1px;
+  background: var(--step-page-color);
   pointer-events: none;
 }
 
-.steps-compact > .step-card:has(.step-page-heading:not([hidden]))::before {
-  background: var(--step-page-color);
+.steps-compact > .step-card:has(> .step-page-heading:not([hidden]))::before {
+  grid-row-start: 2;
 }
 
-.steps-container.steps-compact > .step-card:is(:hover, :focus-within) {
+.steps-compact > .step-card.is-page-collapsed::before {
+  display: none;
+}
+
+.steps-compact > .step-card > .step-page-heading:not([hidden]) {
+  position: relative;
+}
+
+.steps-container.steps-compact .step-card:is(:hover, :focus-within) {
   background: var(--bg-primary);
 }
 
-.steps-container.steps-compact > .step-card.is-selected {
+.steps-container.steps-compact .step-card.is-selected {
   background: var(--accent-light);
   border-bottom-color: var(--accent-color);
 }
@@ -590,7 +626,7 @@
   padding-inline: 4px;
   border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--step-page-color) 15%, var(--bg-primary));
-  color: var(--step-page-color);
+  color: var(--step-page-label-color);
 }
 
 .steps-compact .step-page-label {
@@ -621,14 +657,14 @@
 
 .steps-compact .step-page-toggle:hover {
   background: var(--bg-primary);
-  color: var(--step-page-color);
+  color: var(--step-page-label-color);
 }
 
 .steps-compact .step-page-toggle[aria-expanded="true"] svg {
   transform: rotate(90deg);
 }
 
-.steps-compact > .is-page-collapsed > :not(.step-page-heading) {
+.steps-compact .is-page-collapsed > :not(.step-page-heading, .step-intent-marker) {
   display: none;
 }
 
@@ -970,10 +1006,10 @@
 }
 
 .confirm-actions button {
-  min-width: 70px;
-  padding: 7px 12px;
+  min-width: 72px;
+  padding: 0 14px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: var(--control-radius);
   background: var(--bg-primary);
   color: var(--text-secondary);
   font-family: inherit;
@@ -1029,36 +1065,35 @@
   display: inline-flex;
 }
 
-/* No steps yet, so there is nothing to select. */
-.steps-section-head.is-empty :is(.step-select-all, .step-clear-btn) {
+/* No steps yet, so there is nothing to select or annotate. */
+.steps-section-head.is-empty :is(.step-select-all, .step-list-actions) {
   display: none;
 }
 
-.steps-section-head .step-clear-btn {
+.step-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+
+.step-list-actions > button {
   flex: none;
-  min-height: 28px;
+  min-height: var(--control-h-sm);
   white-space: nowrap;
 }
 
-.step-batch-actions .btn {
-  width: 28px;
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0;
-  border-radius: var(--radius-md);
-  font-size: 11px;
-  box-shadow: none;
+.step-list-actions > .step-intent-btn {
+  width: auto;
 }
 
-/* The panel's danger colour, in this row's outline form rather than the filled
-   chip the workbench's actionbars use. */
-.step-batch-actions .btn-danger {
-  --button-bg: var(--bg-primary);
-  --button-text: var(--danger-color);
-  --button-border: var(--danger-border);
-  --button-hover-bg: var(--danger-light);
-  --button-hover-border: var(--danger-color);
+.step-batch-actions .btn {
+  width: var(--control-h-sm);
+  flex: 0 0 auto;
+  min-height: var(--control-h-sm);
+  padding: 0;
 }
+
 
 /* promptText has no leading icon, so its content must occupy the full dialog. */
 .prompt-text-dialog {
@@ -1165,6 +1200,13 @@
   line-height: 1.5;
 }
 
+.has-intent-groups .steps-screenshots-disabled {
+  margin: 0;
+  padding: 4px 15px 0;
+  border: 0;
+  background: transparent;
+}
+
 /* ── Recording settings ── */
 /* No leading icon here either, and the content is the tallest dialog in the
    extension: it is capped to the viewport and scrolls, with the buttons pinned
@@ -1218,13 +1260,14 @@
    the geometry above so the row reads as one set. */
 .step-clear-btn {
   flex: 0 0 auto;
-  min-height: 26px;
-  padding: 4px 10px;
+  min-height: var(--control-h-sm);
+  padding: 0 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: var(--control-radius);
   background: var(--bg-primary);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-family: inherit;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
@@ -1232,15 +1275,21 @@
 }
 
 .step-clear-btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Clearing the workspace is the destructive one: it warns on hover. */
+#clear-steps-btn:hover:not(:disabled) {
   border-color: var(--danger-color);
   background: var(--danger-light);
   color: var(--danger-color);
 }
 
 .step-clear-btn:disabled {
-  color: var(--text-faint);
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.45;
 }
 .recover-recordings-btn { width: auto; padding: 0 8px; gap: 5px; font-size: 11px; white-space: nowrap; }
 .recover-recordings-btn[aria-expanded="true"] { border-color: var(--accent-color); background: var(--accent-light); color: var(--accent-color); }
@@ -1324,7 +1373,7 @@
   border-radius: var(--radius-xs);
 }
 .recording-pages li[aria-current="true"] { background: var(--accent-light); }
-.recording-page-handle { flex: none; color: var(--accent-color); font-weight: 600; }
+.recording-page-handle { flex: none; color: var(--text-muted); font-size: 11px; }
 .recording-page-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recording-pages form { margin-top: 6px; }
 .recording-pages form label { display: block; margin-bottom: 4px; color: var(--text-secondary); }

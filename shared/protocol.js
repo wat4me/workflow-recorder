@@ -13,7 +13,6 @@
 
   const MESSAGE = Object.freeze({
     setSidePanelLayout: "setSidePanelLayout",
-    prepareSidePanelForTab: "prepareSidePanelForTab",
     getActions: "getActions",
     getDraftState: "getDraftState",
     joinRecordingPage: "joinRecordingPage",
@@ -26,6 +25,9 @@
     newCase: "newCase",
     clearSteps: "clearSteps",
     saveCase: "saveCase",
+    getIntent: "getIntent",
+    saveIntent: "saveIntent",
+    updateCaseIntent: "updateCaseIntent",
     loadCase: "loadCase",
     renameCase: "renameCase",
     deleteCase: "deleteCase",

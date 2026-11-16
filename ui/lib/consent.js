@@ -84,22 +84,14 @@
       submitButton.textContent = t("consentAccept", [], "同意并开始录制");
 
       const finish = accepted => {
-        document.removeEventListener("keydown", onKeyDown);
-        overlay.remove();
+        close();
         resolve(accepted);
       };
-      const onKeyDown = event => {
-        if (event.key === "Escape") finish(false);
-      };
+      const close = globalThis.RecorderDialogs.openModal(overlay, { onDismiss: () => finish(false) });
 
       const cancelButton = overlay.querySelector(".confirm-cancel");
       cancelButton.addEventListener("click", () => finish(false));
       submitButton.addEventListener("click", () => finish(true));
-      overlay.addEventListener("click", event => {
-        if (event.target === overlay) finish(false);
-      });
-      document.addEventListener("keydown", onKeyDown);
-      document.body.appendChild(overlay);
       submitButton.focus();
     });
   }

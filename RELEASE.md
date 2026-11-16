@@ -1,5 +1,14 @@
 # Release
 
+## 1.4.0
+
+- Group recorded actions into collapsible test-step cards in the side panel. Open the annotation overview to browse and edit groups by title and range.
+- Annotate a range from the side panel or edit a saved case alongside its recorded actions in the workbench. Each test step has its own goal, preconditions, purpose, verification points, pass criteria and notes.
+- Include test-step annotations in document exports and tasks copied for AI.
+- Continue a saved case from the workbench with its recorded steps and annotations loaded into the chosen tab. New actions append to the existing steps.
+- Show webpage titles and localized tab numbers in the recording list. Use the same tab numbers in the workbench preview and recording scope.
+- Upgrade the saved-case storage schema to version 3.
+
 ## 1.3.1
 
 - Keep unsaved recordings in the background, show recovery only when multiple recordings are available, and retain up to 10 unsaved recordings.

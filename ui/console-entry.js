@@ -9,6 +9,7 @@ import "./lib/bridge.js";
 import "./lib/screenshot-media.js";
 import "./lib/folder-picker.js";
 import "./lib/dialogs.js";
+import "./lib/intent-dialog.js";
 import "./lib/step-display-settings.js";
 import "./lib/settings-dialog.js";
 import "./lib/archive-stream.js";

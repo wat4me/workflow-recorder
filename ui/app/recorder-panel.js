@@ -16,7 +16,8 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
     const {
       recordBtn, recordBtnLabel, manualScreenshotBtn,
       downloadDocCompactBtn, clearStepsBtn, moreActionsBtn, moreActionsMenu,
-      captureSettingsBtn, downloadDocBtn, copyTaskBtn, saveCurrentCaseBtn,
+      captureSettingsBtn, downloadDocBtn, copyTaskBtn, saveCurrentCaseBtn, intentBtn,
+      intentSummary, intentSummaryBtn, intentSummaryMeta,
     } = elements;
 
     const { t } = globalThis.RecorderI18n;
@@ -43,6 +44,9 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
     // screenshot, and each read is a message plus a lookup per stored step.
     let renderedActions = [];
     let renderedCaptureState = {};
+    // The tester's annotation for the open workspace, as stored (already
+    // normalised by the background). Read with the rest of the panel state.
+    let renderedIntent = null;
     let renderedStored = null;
     let refreshPromise = null;
     let refreshVersion = 0;
@@ -176,6 +180,111 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
       return renderedCaptureState;
     }
 
+    function intentSteps() {
+      return Array.isArray(renderedIntent?.steps) ? renderedIntent.steps : [];
+    }
+
+    const editIntentGroup = stepId => editIntent({ stepId });
+
+    /** Annotation progress and entry point for editing existing test steps. */
+    function renderIntentSummary(actions) {
+      if (!intentSummary) return;
+      // Hidden until the case has an annotation at all: an unannotated recording
+      // keeps exactly the layout it had before, and the header button is the
+      // entry point for the first one.
+      intentSummary.hidden = actions.length === 0 || !renderedIntent;
+      if (intentSummary.hidden) return;
+      const steps = intentSteps();
+      const pending = steps.filter(step => step.start > actions.length).length;
+      const started = steps.length - pending;
+      const checks = steps.reduce((total, step) => total + (step.checks || []).length, 0);
+      if (intentSummaryMeta) {
+        intentSummaryMeta.textContent = [
+          t("intentSummarySteps", [String(started)], `已划分 ${started} 个测试步骤`),
+          checks ? t("intentSummaryChecks", [String(checks)], `${checks} 个验证点`) : "",
+          pending ? t("intentSummaryPending", [String(pending)], `${pending} 个等待录制`) : ""
+        ].filter(Boolean).join(" · ");
+      }
+    }
+
+    /**
+     * With steps checked, the header button reads "标注第 2–5 步" and annotates
+     * them; unchecked steps inside that range are tinted, since they are included.
+     */
+    function updateIntentButton(indices = stepView.selectedIndices?.() || []) {
+      if (!intentBtn) return;
+      const { selectionRange, annotateRangeLabel } = globalThis.RecorderIntentDialog;
+      const range = selectionRange(indices);
+      const rangeLabel = intentBtn.querySelector(".intent-btn-range");
+      intentBtn.querySelector(".intent-btn-label").hidden = Boolean(range);
+      rangeLabel.hidden = !range;
+      rangeLabel.textContent = range ? annotateRangeLabel(range) : "";
+      intentBtn.title = range?.gaps ? t("intentAnnotateGapHint", [], "包含中间未勾选的步骤") : "";
+      intentBtn.classList.toggle("btn-primary", Boolean(range));
+      intentBtn.classList.toggle("btn-secondary", !range);
+      document.getElementById("steps-container")?.classList.toggle("has-range-gaps", Boolean(range?.gaps));
+      const gapKey = range?.gaps ? `${range.start}-${range.end}` : "";
+      if (gapKey !== highlightedGap) {
+        highlightedGap = gapKey;
+        stepView.highlightRange?.(range?.gaps ? range.start - 1 : null, range?.gaps ? range.end - 1 : null);
+      }
+    }
+    let highlightedGap = "";
+
+    async function editIntent({ stepId = null, manage = false, selectedIds = null } = {}) {
+      const workspaceDraftId = renderedStored?.draftId;
+      const { selectionRange, overlappingSteps, confirmReplace } = globalThis.RecorderIntentDialog;
+      try {
+        const response = await sendRuntimeMessage({ action: MESSAGE.getActions, workspaceDraftId, includeIntent: true });
+        if (!response?.success) throw new Error(response?.error || t("intentSaveFailed", [], "保存标注失败"));
+        const { actions, intent } = response;
+        const stepIndex = stepId === null ? null : intent?.steps?.findIndex(step => step.id === stepId);
+        if (!actions.length || (stepId !== null && !(stepIndex >= 0))) {
+          throw new Error(t("intentActionsChanged", [], "录制步骤已变化，请重新打开标注后再试"));
+        }
+        // Checked steps are resolved against the steps just read, so a step
+        // recorded or deleted meanwhile cannot shift the range.
+        let initialRange = null;
+        const confirmed = new Set();
+        const replaceOptions = { allSteps: intent?.steps || [], stepCount: actions.length, confirmed };
+        if (selectedIds?.length) {
+          const indices = selectedIds.map(id => actions.findIndex(action => action.id === id));
+          if (indices.some(index => index < 0)) {
+            throw new Error(t("intentActionsChanged", [], "录制步骤已变化，请重新打开标注后再试"));
+          }
+          initialRange = selectionRange(indices);
+          const overlapping = overlappingSteps(intent?.steps, initialRange, actions.length);
+          if (!(await confirmReplace(overlapping, replaceOptions))) return;
+        }
+        const edited = await globalThis.RecorderIntentDialog.open({
+          intent,
+          stepCount: actions.length,
+          stepIndex,
+          manage,
+          actions,
+          initialRange: initialRange && { start: initialRange.start, end: initialRange.end },
+          resolveOverlap: initialRange
+            ? steps => confirmReplace(steps, { ...replaceOptions, confirmText: t("intentOverlapDiscardSave", [], "丢弃并保存") })
+            : null,
+          save: next => sendMessage({
+            action: MESSAGE.saveIntent,
+            workspaceDraftId: response.draftId || workspaceDraftId,
+            expectedActionIds: actions.map(action => action.id),
+            expectedIntent: intent,
+            intent: next
+          })
+        });
+        if (!edited) return;
+        if (selectedIds?.length) stepView.clearSelection?.();
+        notify(t("intentSaved", [], "已保存标注"));
+        // Storage is the source of truth for the markers; repaint from it rather
+        // than from the form so the panel shows exactly what was stored.
+        await refreshState();
+      } catch (error) {
+        reportError(error.message || t("intentSaveFailed", [], "保存标注失败"));
+      }
+    }
+
     function refreshState() {
       ++refreshVersion;
       if (refreshPromise) return refreshPromise;
@@ -188,7 +297,7 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
           version = refreshVersion;
           const tabId = await resolveRootTabId();
           const [stored, workspace] = await Promise.all([
-            chrome.storage.local.get(["isRecording", "activeCaseId", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, STEP_DISPLAY_SETTINGS_KEY]),
+            chrome.storage.local.get(["isRecording", "activeCaseId", "workspaceOrigin", "screenshotCaptureState", CAPTURE_SETTINGS_KEY, SESSION_CAPTURE_SETTINGS_KEY, STEP_DISPLAY_SETTINGS_KEY, "workspaceIntent"]),
             Number.isInteger(tabId) ? sendMessage({ action: MESSAGE.getDraftState, tabId }) : readActions().then(actions => actions ? { actions } : { success: false })
           ]);
           if (workspace.success === false) throw new Error(workspace.error || "草稿读取失败");
@@ -201,8 +310,11 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
 
     function renderState(stored, actions, changedIds = null) {
       renderedStored = stored;
+      renderedIntent = stored.workspaceIntent || null;
       stepView.setWorkspaceContext?.({ workspaceDraftId: stored.draftId || null });
+      stepView.setIntentGroups(intentSteps(), editIntentGroup);
       renderRecovery(stored, actions);
+      renderIntentSummary(actions);
       // Names belong to a workspace, not the lifetime of this side-panel page.
       // The origin survives edits; root recordings are identified by their first step.
       const origin = stored.workspaceOrigin;
@@ -220,6 +332,9 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
       renderedActions = actions;
       const canContinue = !isRecording && actions.length > 0;
       if (copyTaskBtn) copyTaskBtn.disabled = copyRequestPending || actions.length === 0;
+      // Annotating needs steps to slice and is the tester's own input, so it
+      // stays available while recording is paused and while it runs.
+      if (intentBtn) intentBtn.disabled = actions.length === 0 || recordingRequestPending;
 
       recordBtn.disabled = recordingRequestPending;
       setRecordButtonState(isRecording, canContinue);
@@ -569,9 +684,9 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
               flashSaved();
             }
           }
-          const response = await sendRuntimeMessage({ action: MESSAGE.getActions, workspaceDraftId });
+          const response = await sendRuntimeMessage({ action: MESSAGE.getActions, workspaceDraftId, includeIntent: true });
           if (!response?.success) throw new Error(response?.error || "草稿读取失败");
-          await exportWorkflow(response.actions, name, options.includeScreenshots);
+          await exportWorkflow(response.actions, name, options.includeScreenshots, response.intent);
         } catch (error) {
           reportError(error.message || t("exportFailed", [], "导出失败"));
         } finally {
@@ -579,6 +694,14 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
           updateSecondaryActions(!isRecording && renderedActions.length > 0);
         }
       }
+
+      intentBtn?.addEventListener("click", () => {
+        const selectedIds = stepView.selectedIds?.() || [];
+        editIntent(selectedIds.length ? { selectedIds } : { manage: true });
+      });
+      stepView.setSelectionListener?.(indices => updateIntentButton(indices));
+      window.addEventListener("recorderLanguageChanged", () => updateIntentButton());
+      intentSummaryBtn?.addEventListener("click", () => editIntent({ manage: true }));
 
       downloadDocBtn.addEventListener("click", async () => {
         closeMoreActions();
@@ -593,7 +716,7 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
         try {
           // Rendering can lag behind a storage update. Copy the committed steps
           // and surface read failures rather than silently copying stale data.
-          const response = await sendRuntimeMessage({ action: MESSAGE.getActions });
+          const response = await sendRuntimeMessage({ action: MESSAGE.getActions, includeIntent: true });
           if (!response?.success || !Array.isArray(response.actions)) {
             throw new Error(response?.error || t("copyFailed", [], "复制失败"));
           }
@@ -602,7 +725,7 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
           const sameWorkspace = actions[0].id === renderedActions[0]?.id;
           const name = (sameWorkspace && caseName) || t("unnamedCase", [], "未命名用例");
           const language = globalThis.RecorderI18n.getLanguage?.() || "zh_CN";
-          await navigator.clipboard.writeText(globalThis.StepDocGenerator.generateTask(name, actions, language));
+          await navigator.clipboard.writeText(globalThis.StepDocGenerator.generateTask(name, actions, language, response.intent));
           notify(t("copyTaskCopied", [], "任务说明已复制"));
         } catch (error) {
           reportError(error.message || t("copyFailed", [], "复制失败"));
@@ -640,6 +763,12 @@ import { savedCaseIdFor } from "../../background/store/workspace-origin.js";
         }
         if (renderedStored?.draftActive === false) return;
         if (changes[STEP_DISPLAY_SETTINGS_KEY]) {
+          refreshState();
+          return;
+        }
+        // The annotation is written from the dialog (or the workbench); repaint
+        // the markers from storage so the list and the document cannot disagree.
+        if (changes.workspaceIntent) {
           refreshState();
           return;
         }

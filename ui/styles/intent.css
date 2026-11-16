@@ -1,0 +1,610 @@
+/* Annotation editor. Reuses the confirm-dialog shell; only the form layout and
+   the boundary rows are new. */
+
+.intent-summary {
+  padding-inline: 6px;
+}
+
+.intent-summary-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.intent-summary-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.intent-summary-action {
+  color: var(--accent-color);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* The annotation spans the first recorded card's full grid width. */
+.step-intent-marker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  grid-column: 1 / -1;
+  margin: 0 0 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--border-color);
+  border-inline-start: 2px solid var(--accent-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.step-intent-marker-label {
+  grid-column: 1;
+  font-weight: 600;
+  color: var(--accent-color);
+}
+
+.step-intent-marker-label,
+.step-intent-marker-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-intent-marker-detail {
+  grid-column: 1;
+  color: var(--text-muted);
+}
+
+.step-intent-marker-edit {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 28px;
+  height: 28px;
+}
+
+.steps-container.steps-compact .step-intent-group {
+  --intent-card-top: 0px;
+  position: relative;
+  isolation: isolate;
+  flex: none;
+  min-width: 0;
+  margin-inline: 6px;
+}
+
+.steps-container.steps-compact .step-intent-group.is-intent-start {
+  --intent-card-top: 10px;
+}
+
+.step-intent-group::before,
+.step-intent-group::after {
+  content: "";
+  position: absolute;
+  inset: var(--intent-card-top) 0 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.step-intent-group::before {
+  z-index: -1;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-xs);
+}
+
+.step-intent-group::after {
+  border: 1px solid var(--border-color);
+}
+
+.step-intent-group.is-intent-start {
+  border-start-start-radius: var(--radius-lg);
+  border-start-end-radius: var(--radius-lg);
+}
+
+.step-intent-group.is-intent-end {
+  border-end-start-radius: var(--radius-lg);
+  border-end-end-radius: var(--radius-lg);
+}
+
+.steps-container.steps-compact .step-intent-group > .step-card {
+  padding-inline: 9px;
+  border-bottom-color: color-mix(in srgb, var(--border-color) 65%, var(--bg-primary));
+}
+
+/* The first row owns the gap so the virtual list measures it with the card. */
+.steps-container.steps-compact .step-intent-group.is-intent-start > .step-card:first-child {
+  padding-block-start: calc(6px + var(--intent-card-top));
+  background-clip: content-box;
+}
+
+.steps-container.steps-compact .step-intent-group.is-intent-end > .step-card:last-child {
+  border-bottom: 0;
+  border-end-start-radius: var(--radius-lg);
+  border-end-end-radius: var(--radius-lg);
+}
+
+.steps-compact .step-intent-group > .step-card::before {
+  display: none;
+}
+
+.steps-compact .step-intent-group .step-intent-marker {
+  position: relative;
+  margin: -6px -9px 1px;
+  padding: 5px 9px 5px 5px;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg-subtle);
+}
+
+.steps-compact .step-intent-group.is-intent-collapsed .step-intent-marker {
+  margin-bottom: -6px;
+  border-bottom: 0;
+  border-radius: var(--radius-lg);
+}
+
+.steps-compact .step-intent-group.is-intent-collapsed > .step-card > :not(.step-intent-marker) {
+  display: none;
+}
+
+.step-intent-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.step-intent-group-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.step-intent-group-toggle svg {
+  flex: none;
+}
+
+.step-intent-group-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.step-intent-group-content {
+  display: grid;
+  min-width: 0;
+}
+
+.step-intent-group-content .step-intent-marker-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.step-intent-group-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-intent-group .step-intent-marker-edit {
+  --button-border: transparent;
+  --button-bg: transparent;
+  --button-text: var(--text-muted);
+  box-shadow: none;
+}
+
+.steps-compact .step-intent-group .step-page-heading:not([hidden]) {
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.steps-compact .step-intent-group .step-page-label {
+  gap: 6px;
+}
+
+.steps-compact .step-intent-group .step-page-name {
+  background: var(--bg-tertiary);
+  color: inherit;
+}
+
+.steps-compact .step-intent-group .step-page-title {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.steps-compact .step-intent-group .step-page-toggle {
+  color: inherit;
+}
+/* The closing rule of a test step. It spans every column like the opening
+   marker, otherwise the step card's grid drops it into the 14px checkbox
+   column. The cards are flex rows outside the compact panel, so the end rule
+   claims a full line and lets the card wrap there. */
+.step-intent-end {
+  grid-column: 1 / -1;
+  flex: 0 0 100%;
+  margin-top: 4px;
+  padding-top: 3px;
+  border-top: 1px dashed var(--border-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.step-card:has(> .step-intent-end) {
+  flex-wrap: wrap;
+}
+/* The shared dialog shell is a two-column grid whose first column is the icon.
+   This dialog has no icon, so it stacks instead -- otherwise the whole form would
+   be squeezed into that 36px column. Same fix as promptTextDialog. */
+.intent-overlay {
+  padding: 12px;
+}
+
+.confirm-dialog.intent-dialog {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
+  width: min(820px, 100%);
+  max-height: calc(100dvh - 24px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.intent-dialog .confirm-content {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 18px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.intent-dialog-header,
+.intent-dialog-footer {
+  padding: 14px 18px;
+}
+
+.intent-dialog-header h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.intent-dialog-footer {
+  border-top: 1px solid var(--border-color);
+}
+
+.intent-dialog-footer .confirm-actions {
+  margin-top: 0;
+}
+
+.intent-dialog-footer button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.intent-error {
+  margin: 0 0 8px;
+  color: var(--danger-color);
+  font-size: 12px;
+}
+
+.intent-hint {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.intent-field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.intent-field-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.intent-step-title,
+.intent-step-goal,
+.intent-step-preconditions,
+.intent-step-purpose,
+.intent-step-note,
+.intent-step-checks,
+.intent-step-pass,
+.intent-step-position,
+.intent-step-end {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.intent-dialog textarea {
+  display: block;
+  resize: vertical;
+}
+
+.intent-dialog :is(input:not([type="checkbox"]), textarea, select):focus {
+  outline: 2px solid var(--accent-subtle);
+  border-color: var(--accent-color);
+}
+
+.intent-step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.intent-step-row {
+  min-width: 0;
+}
+
+.intent-step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.intent-range-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex-basis: 100%;
+  gap: 8px;
+}
+
+.intent-range-heading .intent-field-label {
+  margin: 0;
+}
+
+.intent-step-range {
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-light);
+  color: var(--accent-color);
+  font-size: 11px;
+}
+
+.intent-range-preview {
+  flex: 0 0 100%;
+  min-width: 0;
+  max-height: 102px;
+  margin: 0;
+  padding: 5px 0 0;
+  border-top: 1px solid var(--border-color);
+  overflow: hidden auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  list-style: none;
+  font-size: 11px;
+  line-height: 19px;
+}
+
+.intent-range-preview:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.intent-range-preview li {
+  display: grid;
+  grid-template-columns: minmax(24px, max-content) minmax(0, 1fr);
+  gap: 6px;
+  align-items: baseline;
+}
+
+.intent-range-preview-number {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.intent-range-preview-description {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-step-row .intent-field--position {
+  flex: 1 1 0;
+  max-width: 104px;
+  min-width: 0;
+  margin: 0;
+}
+
+.intent-field--position input {
+  height: 32px;
+}
+
+.intent-step-ignore {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.intent-step-row .intent-field {
+  margin-top: 8px;
+}
+
+.intent-form-section {
+  margin-top: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+}
+
+.intent-form-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.intent-form-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.intent-form-section > summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-inline-start: auto;
+  margin-inline-end: 2px;
+  border-block-end: 1px solid var(--text-muted);
+  border-inline-end: 1px solid var(--text-muted);
+  transform: rotate(45deg);
+}
+
+.intent-form-section[open] > summary::after {
+  transform: rotate(225deg);
+}
+
+.intent-form-section > summary:hover {
+  background: var(--bg-hover);
+}
+
+.intent-form-section > summary:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.intent-section-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.intent-section-fields {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.intent-warning-list {
+  margin: 0 0 8px;
+  padding: 8px 8px 8px 24px;
+  border: 1px solid var(--warning-text, #f2c94c);
+  border-radius: var(--radius-sm);
+  background: var(--warning-light, #fffbea);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.intent-warning-list li + li {
+  margin-top: 4px;
+}
+
+
+.confirm-dialog.intent-picker {
+  width: min(460px, 100%);
+}
+
+.intent-picker-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+}
+
+.intent-picker-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.intent-picker-item strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.intent-picker-item small {
+  color: var(--text-muted);
+}
+
+.intent-picker-content {
+  min-width: 0;
+}
+
+.intent-picker-detail {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-picker-edit {
+  flex: none;
+  color: var(--accent-color);
+}
+
+@media (max-width: 370px) {
+  .intent-dialog .confirm-content,
+  .intent-dialog-header,
+  .intent-dialog-footer {
+    padding-inline: 12px;
+  }
+}

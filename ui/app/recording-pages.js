@@ -1,4 +1,6 @@
 /** Shows recording membership independently from whichever draft the panel renders. */
+import { recordingTabLabel } from "../lib/recording-tab-label.js";
+
 export function createRecordingPages() {
   const { t } = globalThis.RecorderI18n;
   const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
@@ -59,13 +61,14 @@ export function createRecordingPages() {
       const row = document.createElement("li");
       const page = document.createElement("span");
       const title = document.createElement("span");
+      const pageName = state.tabsMapping?.[scopeIds[index]];
       page.className = "recording-page-handle";
-      page.textContent = state.tabsMapping?.[scopeIds[index]] || t("recordingPagePendingHandle", [], "待编号");
+      page.textContent = pageName ? recordingTabLabel(pageName) : t("recordingPagePendingHandle", [], "待编号");
       title.className = "recording-page-title";
       title.textContent = tab?.title || tab?.url || t("untitledPage", [], "未命名页面");
       title.title = tab?.url || title.textContent;
       if (tab?.id === current?.id) row.setAttribute("aria-current", "true");
-      row.append(page, title);
+      row.append(title, page);
       return row;
     }));
   }
@@ -130,7 +133,8 @@ export function createRecordingPages() {
       closePicker();
       join.focus();
       refreshQuietly();
-      notify(t("recordingPageJoined", [response.pageName], `已加入录制（${response.pageName}）`));
+      const tabLabel = recordingTabLabel(response.pageName);
+      notify(t("recordingPageJoined", [tabLabel], `已加入录制（${tabLabel}）`));
     } catch (error) {
       reportError(error.message);
     } finally {

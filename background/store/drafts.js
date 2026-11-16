@@ -1,5 +1,5 @@
 import * as actionStore from "./actions.js";
-import { screenshotKeysOf, readEntry, readIndex } from "./case-store.js";
+import { isIntentPoolKey, screenshotKeysOf, readEntry, readIndex } from "./case-store.js";
 import { savedCaseIdFor, tombstone } from "./workspace-origin.js";
 
 export const DRAFT_INDEX_KEY = "recordingDraftIndex";
@@ -9,9 +9,10 @@ const PENDING_REMOVALS_KEY = "pendingRecordingDraftRemovals";
 const detailKey = id => `recordingDraft:${id}`;
 const mediaKey = id => `recordingDraftMedia:${id}`;
 const STATE_KEYS = ["isRecording", "recordingTabIds", "tabsMapping", "resumableScope", "nextPageNumber",
-  "activeCaseId", "workspaceOrigin", "recordingCaptureSettings", "screenshotCaptureState"];
+  "activeCaseId", "workspaceOrigin", "recordingCaptureSettings", "screenshotCaptureState", "workspaceIntent"];
 const emptyState = () => ({ isRecording: false, recordingTabIds: [], tabsMapping: {}, resumableScope: null,
-  nextPageNumber: 1, activeCaseId: null, workspaceOrigin: null, recordingCaptureSettings: null });
+  nextPageNumber: 1, activeCaseId: null, workspaceOrigin: null, recordingCaptureSettings: null,
+  workspaceIntent: null });
 const uniqueTabs = ids => [...new Set((ids || []).filter(Number.isInteger))];
 const scopeTabs = state => uniqueTabs([...(state.recordingTabIds || []), ...(state.resumableScope?.tabIds || [])]);
 const bindTabs = (index, draftId, tabs) => index.map(entry => entry.id === draftId
@@ -20,9 +21,10 @@ const bindTabs = (index, draftId, tabs) => index.map(entry => entry.id === draft
 
 export async function readDraftMediaKeys() {
   const stored = await chrome.storage.local.get([DRAFT_INDEX_KEY, ACTIVE_DRAFT_KEY]);
-  const keys = (stored[DRAFT_INDEX_KEY] || []).filter(entry => entry.id !== stored[ACTIVE_DRAFT_KEY]).map(entry => mediaKey(entry.id));
+  const inactive = (stored[DRAFT_INDEX_KEY] || []).filter(entry => entry.id !== stored[ACTIVE_DRAFT_KEY]);
+  const keys = inactive.map(entry => mediaKey(entry.id));
   const media = keys.length ? await chrome.storage.local.get(keys) : {};
-  return new Set(keys.flatMap(key => media[key] || []));
+  return new Set(keys.flatMap(key => media[key] || []).filter(key => !isIntentPoolKey(key)));
 }
 
 /** The live workspace stays incremental; only inactive drafts store a snapshot.
@@ -133,7 +135,7 @@ export function createDraftManager({ session, queueCaseWrite, drainRegistrations
       actions = await actionStore.readActions(); selectedState = state;
     } else if (entry) {
       const snapshot = (await chrome.storage.local.get(detailKey(entry.id)))[detailKey(entry.id)];
-      actions = snapshot?.actions || []; selectedState = snapshot?.state || emptyState();
+      actions = snapshot?.actions || []; selectedState = { ...emptyState(), ...(snapshot?.state || {}) };
     }
     const missing = index.filter(item => item.id !== activeId && item.stepCount > 0
       && !Object.hasOwn(item, "savedCaseId") && !legacySummaries.has(item.id));

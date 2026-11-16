@@ -1,4 +1,6 @@
 import "../shared/protocol.js";
+import * as intentStore from "./store/intent.js";
+import { sanitizeIntent } from "./store/case-store.js";
 
 const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
 
@@ -25,6 +27,20 @@ export function createApplicationRoutes({
   const guarded = (request, callback) => request.workspaceDraftId && drafts
     ? queueRecordingTransition(async () => { await drafts.assertActive(request.workspaceDraftId); return callback(); })
     : callback();
+
+  async function readWorkspace(request, includeIntent) {
+    if (Number.isInteger(request.scopeTabId) && drafts) {
+      const state = await drafts.read(request.scopeTabId);
+      if (request.workspaceDraftId && request.workspaceDraftId !== state.draftId) throw new Error("草稿已切换，请重试");
+      return { success: true, actions: state.actions, draftId: state.draftId,
+        ...(includeIntent ? { intent: sanitizeIntent(state.state?.workspaceIntent, state.actions.length) } : {}) };
+    }
+    if (drafts) await drafts.assertActive(request.workspaceDraftId);
+    const actions = await actionStore.readActions();
+    return { success: true, actions,
+      ...(includeIntent ? { intent: await intentStore.readIntent(actions.length) } : {}) };
+  }
+
   return {
     ...(globalThis.WorkflowRecorderProtocol.RECORDING_DEBUG_ENABLED ? {
       [MESSAGE.recordingDebugEvent]: (request, sender) => recordingDebug.append({
@@ -37,10 +53,6 @@ export function createApplicationRoutes({
       const result = await sidePanel.setLayout(request);
       if (result.success && request.open && drafts) return queueRecordingTransition(() => drafts.activate(request.tabId));
       return result;
-    },
-    [MESSAGE.prepareSidePanelForTab]: async request => {
-      if (drafts) await queueRecordingTransition(() => drafts.activate(request.tabId));
-      return sidePanel.prepareForTab(request.tabId);
     },
     [MESSAGE.getDraftState]: request => queueRecordingTransition(() => drafts.read(request.tabId)),
     [MESSAGE.joinRecordingPage]: (request, sender) => {
@@ -61,14 +73,9 @@ export function createApplicationRoutes({
       });
     },
     [MESSAGE.selectDraft]: request => queueRecordingTransition(() => drafts.activate(request.tabId, request.draftId)),
-    [MESSAGE.getActions]: request => queueRecordingTransition(async () => {
-      if (Number.isInteger(request.scopeTabId) && drafts) {
-        const state = await drafts.read(request.scopeTabId);
-        if (request.workspaceDraftId && request.workspaceDraftId !== state.draftId) throw new Error("草稿已切换，请重试");
-        return { success: true, actions: state.actions };
-      }
-      return { success: true, actions: await actionStore.readActions() };
-    }),
+    [MESSAGE.getActions]: request => queueRecordingTransition(() => request.includeIntent
+      ? queueAction(() => readWorkspace(request, true))
+      : readWorkspace(request, false)),
     [MESSAGE.getSchemaState]: async () => ({ success: true, ...(await storeReady) }),
     [MESSAGE.getLocaleMessages]: async request => ({
       success: true,
@@ -85,6 +92,14 @@ export function createApplicationRoutes({
     [MESSAGE.newCase]: () => cases.createNew(),
     [MESSAGE.clearSteps]: request => guarded(request, () => cases.clearWorkspace()),
     [MESSAGE.saveCase]: request => guarded(request, () => cases.save(request.name, !!request.snapshot, request.folderId)),
+    [MESSAGE.getIntent]: request => queueRecordingTransition(() =>
+      queueAction(async () => ({ success: true, intent: (await readWorkspace(request, true)).intent }))),
+    [MESSAGE.saveIntent]: request => queueRecordingTransition(async () => {
+      if (drafts) await drafts.assertActive(request.workspaceDraftId);
+      return queueAction(() => cases.saveWorkspaceIntent(request.intent, request));
+    }),
+    [MESSAGE.updateCaseIntent]: request => queueAction(() =>
+      cases.updateIntent(request.caseId, request.intent, request.expectedIntent)),
     [MESSAGE.loadCase]: request => queueRecordingTransition(async () => {
       if (Number.isInteger(request.tabId) && drafts) await drafts.activate(request.tabId);
       return cases.load(request.caseId);

@@ -6,6 +6,7 @@
   <title data-i18n="popupTitle">流程录制 - 侧边栏</title>
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/theme-refresh.css">
+  <link rel="stylesheet" href="styles/intent.css">
 </head>
 <body>
   <div class="app-container">
@@ -138,9 +139,15 @@
               <span class="recorder-icon-label" data-i18n="deleteSelectedSteps">删除所选</span>
             </button>
           </div>
-          <button class="step-clear-btn" id="clear-steps-btn" type="button" disabled title="清空步骤" aria-label="清空步骤" data-i18n-title="clearSteps" data-i18n-aria-label="clearSteps">
-            <span data-i18n="clearSteps">清空步骤</span>
-          </button>
+          <div class="step-list-actions">
+            <button class="btn btn-secondary btn-compact step-intent-btn" id="intent-btn" type="button" aria-haspopup="dialog" disabled>
+              <span class="intent-btn-label" data-i18n="intentAnnotationTitle">标注意图</span>
+              <span class="intent-btn-range" hidden></span>
+            </button>
+            <button class="step-clear-btn" id="clear-steps-btn" type="button" disabled title="清空步骤" aria-label="清空步骤" data-i18n-title="clearSteps" data-i18n-aria-label="clearSteps">
+              <span data-i18n="clearSteps">清空步骤</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -158,6 +165,12 @@
 
       <div class="tab-content">
         <div class="tab-panel active" id="panel-steps">
+          <section id="intent-summary" class="intent-summary" hidden>
+            <button type="button" class="intent-summary-main" id="intent-summary-btn" aria-haspopup="dialog">
+              <span class="intent-summary-meta" id="intent-summary-meta"></span>
+              <span class="intent-summary-action" data-i18n="intentManage">查看标注</span>
+            </button>
+          </section>
           <div class="steps-container" id="steps-container">
             <div class="empty-state" id="empty-state">
               <div class="empty-icon">

@@ -428,6 +428,7 @@ screenshot:<actionId>:b<captureId>  # 操作前帧
 - `background/capture/screenshots.js`：截图任务队列、页面稳定等待和持久化流程；图像处理与键生成位于同目录独立模块。
 - `background/store/actions.js`：按 `actionOrder` + `action:<id>` 组织的步骤存储。
 - `background/store/cases.js`：历史用例命令和工作区生命周期。
+- `background/store/intent.js`：当前工作区的标注草稿；随草稿快照一起切换，保存用例时复制到用例记录。
 - `background/store/media-cleanup.js`：引用感知的截图清理、重试和孤儿扫描。引用集合的唯一入口，删除预览也走这里，所以它承诺的释放量和实际结果不会分叉。
 - `background/store/schema.js`：存储结构版本校验。
 
@@ -456,11 +457,12 @@ screenshot:<actionId>:b<captureId>  # 操作前帧
 - `ui/lib/dom.js`：无依赖的 DOM 叶子工具。
 - `ui/lib/bridge.js`：与 Service Worker 的唯一通信通道，含超时兜底。
 - `ui/lib/dialogs.js`：替代 `alert` / `confirm` / `prompt` 的弹窗与轻提示。
+- `ui/lib/intent-dialog.js`：每次保存新增一条测试步骤意图（下一次从上一段结束后开始），或编辑某一条已有步骤；标注内容全部由测试者填写。
 - `ui/lib/consent.js`：首次录制前的数据披露同意流程。
 - `ui/lib/export.js`：ZIP 导出、文件名净化和下载触发。
 - `ui/lib/case-package.js`：可移植 `.swrcase` 用例包的生成、校验、导入与媒体回滚。
 - `ui/lib/image-preview.js`：截图全尺寸查看。
-- `ui/lib/doc-generator.js`：AI 友好的英文步骤文档生成器。
+- `ui/lib/doc-generator.js`：AI 友好的英文步骤文档生成器；测试意图存在时在文档里加测试目的、验证点和分段标题，原步骤与定位证据逐字保留。
 
 HTML 只引用页面入口，内部加载顺序由 ES-module import 图维护。
 

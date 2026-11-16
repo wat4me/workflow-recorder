@@ -6,6 +6,7 @@ export function attachFolders(ctx) {
     t, MESSAGE, sendRuntimeMessage, confirmAction, notify, promptText, reportError,
     folderList, createFolderButton, searchScope
   } = ctx;
+  const { openModal } = globalThis.RecorderDialogs;
   const folderRootTarget = createFolderButton.parentElement;
   ctx.folderRootTarget = folderRootTarget;
   ctx.folderMenu = null;
@@ -146,10 +147,10 @@ export function attachFolders(ctx) {
     ctx.folderMenu = menu;
     ctx.folderMenuButton = button;
     button.setAttribute("aria-expanded", "true");
-    const addItem = (label, run, disabled = false, hint = "") => {
+    const addItem = (label, run, disabled = false, hint = "", danger = false) => {
       const item = document.createElement("button");
       item.type = "button";
-      item.className = "more-action";
+      item.className = danger ? "more-action danger" : "more-action";
       item.setAttribute("role", "menuitem");
       item.textContent = label;
       item.disabled = disabled;
@@ -178,12 +179,13 @@ export function attachFolders(ctx) {
       if (!confirmed) return;
       const response = await sendRuntimeMessage({ action: MESSAGE.deleteCaseFolder, folderId });
       if (!response?.success) return reportError(response?.error || t("deleteFolderFailed", [], "删除文件夹失败"));
+      notify(t("folderDeleted", [], "文件夹已删除"));
       if (descendantIds(folderId).has(ctx.activeFolderId)) {
         ctx.activeFolderId = "unfiled";
         searchScope.value = "all";
       }
       await ctx.refresh();
-    }, count > 0, count > 0 ? t("folderNotEmptyDeleteHint", [count], `仍有 ${count} 个用例，不能删除`) : "");
+    }, count > 0, count > 0 ? t("folderNotEmptyDeleteHint", [count], `仍有 ${count} 个用例，不能删除`) : "", true);
     document.body.append(menu);
     const rect = button.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - menu.offsetWidth - 8))}px`;
@@ -203,6 +205,7 @@ export function attachFolders(ctx) {
     if (name === null) return;
     const response = await sendRuntimeMessage({ action: MESSAGE.createCaseFolder, name, parentId });
     if (!response?.success) return reportError(response?.error || t("createFolderFailed", [], "创建文件夹失败"));
+    notify(t("folderCreated", [], "文件夹已创建"));
     ctx.activeFolderId = response.folder.id;
     if (parentId) {
       ctx.collapsedFolders.delete(parentId);
@@ -400,29 +403,25 @@ export function attachFolders(ctx) {
       actions.append(cancel, submit);
       dialog.append(content, actions);
       overlay.append(dialog);
+      let moving = false;
       const finish = result => {
-        document.removeEventListener("keydown", onKeyDown);
-        overlay.remove();
+        if (moving && !result) return;
+        close();
         resolve(result);
       };
-      const onKeyDown = event => {
-        if (event.key === "Escape") finish(false);
-      };
+      const close = openModal(overlay, { onDismiss: () => finish(false) });
       cancel.addEventListener("click", () => finish(false));
       submit.addEventListener("click", async () => {
         submit.disabled = true;
+        moving = true;
         const moved = movingFolderId
           ? await updateFolder(movingFolderId, { parentId: selectedFolderId })
           : await ctx.moveCases(caseIds, selectedFolderId, caseIds.length > 1);
+        moving = false;
         if (moved) finish(true);
         else submit.disabled = false;
       });
-      overlay.addEventListener("click", event => {
-        if (event.target === overlay) finish(false);
-      });
-      document.addEventListener("keydown", onKeyDown);
-      document.body.append(overlay);
-      choices.querySelector(".is-selected")?.focus();
+      (choices.querySelector(".is-selected") || submit).focus();
     });
   }
 

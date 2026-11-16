@@ -33,9 +33,12 @@ const StepDocGenerator = {
   /**
    * Compiles the full step document for export / preview / copy.
    * @param {Array} actions
+   * @param {Object|null} intent Tester-authored annotations; omitted when the
+   *   case was never annotated, so the document stays byte-identical to older
+   *   builds in that case.
    * @returns {string} Plain-text step document
    */
-  generate(actions) {
+  generate(actions, intent = null) {
     if (!actions || actions.length === 0) {
       return "No steps recorded yet.";
     }
@@ -71,7 +74,28 @@ const StepDocGenerator = {
     // changes or the model has no way to tell the flow moved on.
     const urlByPage = new Map();
     let previousPageName = null;
+    // A test step inserted while recording starts one past the last step and
+    // only fills in as the tester records. Until it owns a step it is a plan,
+    // not part of the flow, so it is left out of the document entirely -- its
+    // verification points included.
+    const sections = this.intentSections(intent, actions.length);
+    // A saved case from before the goal moved onto the steps still has one
+    // document-level goal. Put it on the first section instead of losing it.
+    const legacyGoal = this.clean(intent?.note, 1000) || this.clean(intent?.goal, 1000);
+    if (legacyGoal && sections.length > 0 && !sections.some(section => this.clean(section.goal, 1000))) {
+      sections[0].goal = legacyGoal;
+    }
+    const sectionAt = new Map(sections.map((section, index) => [section.afterStep, { section, ordinal: index + 1 }]));
+    let sectionEnd = null;
     actions.forEach((action, idx) => {
+      const boundary = sectionAt.get(idx);
+      if (boundary) {
+        lines.push(...this.renderIntentStep(boundary.section, boundary.ordinal));
+        sectionEnd = boundary.section.end;
+      } else if (idx === sectionEnd) {
+        lines.push("", `## ${this.uiText("intentUnannotatedSteps", [], "未标注的录制步骤")}`, "");
+        sectionEnd = null;
+      }
       const pageName = action.pageName || "page1";
       const step = this.describeStep(action);
       lines.push(`${idx + 1}. [${pageName}] ${step.detail}`);
@@ -111,8 +135,77 @@ const StepDocGenerator = {
     return lines.join("\n");
   },
 
-  generateTask(caseName, actions, language = "zh_CN") {
-    const workflow = this.generate(actions);
+  /**
+   * Logical test steps, ordered by the recorded step each one starts at.
+   *
+   * `start: 5` means "this section opens before atomic step 5". A test step
+   * waiting for its first recorded action is omitted.
+   * Two sections at one position are collapsed to the first: the writer is the
+   * one place that guarantees uniqueness, but a hand-edited record must not be
+   * able to duplicate a boundary in the document.
+   */
+  intentSections(intent, stepCount) {
+    if (!intent || !Array.isArray(intent.steps)) return [];
+    const seen = new Set();
+    const sections = [];
+    for (const step of intent.steps) {
+      // `afterStep` is the field name the first iteration of this annotation
+      // used; accepting it keeps a record written then readable now.
+      const start = Number.isInteger(step?.start) ? step.start
+        : Number.isInteger(step?.afterStep) ? step.afterStep + 1 : null;
+      if (start === null || start < 1 || start > stepCount) continue;
+      const afterStep = start - 1;
+      if (seen.has(afterStep)) continue;
+      seen.add(afterStep);
+      sections.push({ ...step, afterStep });
+    }
+    sections.sort((a, b) => a.afterStep - b.afterStep);
+    return sections.flatMap((section, index) => {
+      const last = sections[index + 1]?.afterStep ?? stepCount;
+      const end = section.open || !Number.isInteger(section.end) ? last : Math.min(section.end, last);
+      return end > section.afterStep ? [{ ...section, end }] : [];
+    });
+  },
+
+  renderIntentStep(section, ordinal) {
+    const title = this.clean(section.title, 120);
+    const label = this.uiText("intentStepHeading", [String(ordinal)], `测试步骤 ${ordinal}`);
+    const skipped = section.ignore ? this.uiText("intentStepSkipped", [], "不参与测试") : "";
+    // The ordinal survives a custom title: it is what other documents and the
+    // tester's own notes refer to.
+    const heading = [title ? `${label}：${title}` : label, skipped ? `（${skipped}）` : ""]
+      .filter(Boolean).join(" ");
+    const lines = [`## ${heading}`];
+    const goal = this.clean(section.goal, 1000);
+    if (goal) lines.push(`${this.uiText("intentGoal", [], "测试目标")}：${goal}`);
+    const preconditions = (Array.isArray(section.preconditions) ? section.preconditions
+      : String(section.preconditions || "").split(/\r?\n/))
+      .map(item => this.clean(item, 500)).filter(Boolean);
+    if (preconditions.length > 0) {
+      lines.push(`${this.uiText("intentPreconditions", [], "前置条件")}：`,
+        ...preconditions.map(item => `- ${item}`));
+    }
+    const purpose = this.clean(section.purpose, 1000);
+    if (purpose) lines.push(`${this.uiText("intentPurpose", [], "目的")}：${purpose}`);
+
+    const checks = (section.checks || []).map(check => this.clean(check, 500)).filter(Boolean);
+    if (checks.length > 0) {
+      lines.push(`${this.uiText("intentChecks", [], "验证点")}：`, ...checks.map(check => `- ${check}`));
+    }
+    const pass = (Array.isArray(section.pass) ? section.pass
+      : String(section.pass || "").split(/\r?\n/))
+      .map(item => this.clean(item, 500)).filter(Boolean);
+    if (pass.length > 0) {
+      lines.push(`${this.uiText("intentPassCriteria", [], "通过标准")}：`, ...pass.map(item => `- ${item}`));
+    }
+    const note = this.clean(section.note, 1000);
+    if (note) lines.push(`${this.uiText("intentStepNote", [], "注意事项")}：${note}`);
+    lines.push("");
+    return lines;
+  },
+
+  generateTask(caseName, actions, language = "zh_CN", intent = null) {
+    const workflow = this.generate(actions, intent);
     if (language === "en") {
       return [
         `- Case: ${caseName || "Unnamed case"}`,

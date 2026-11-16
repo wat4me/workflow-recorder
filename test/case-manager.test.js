@@ -121,6 +121,28 @@ test("saving banks the workspace and makes the case the active baseline", async 
   assert.notEqual(storage.data[`case:${result.case.id}`].actions, storage.data["action:s1"]);
 });
 
+test("saving carries the workspace annotation onto the case", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("s1"), action("s2"), action("s3")]);
+  storage.data.workspaceIntent = {
+    steps: [{ id: "s1", title: "上传", afterStep: 2, goal: "上传本地文件能否被读到", checks: ["附件出现"], note: "" }]
+  };
+
+  const result = await cases.save("Annotated");
+  assert.equal(result.success, true);
+  const saved = storage.data[`case:${result.case.id}`].intent;
+  assert.equal(saved.goal, undefined);
+  assert.equal(saved.steps[0].goal, "上传本地文件能否被读到");
+  assert.deepEqual(saved.steps[0].checks, ["附件出现"]);
+
+  // A case saved from an unannotated workspace has no intent key at all, so it
+  // exports exactly like a case from before the field existed.
+  await cases.clearWorkspace();
+  seedWorkspace(storage, [action("s4")]);
+  const plain = await cases.save("Plain");
+  assert.equal(storage.data[`case:${plain.case.id}`].intent, undefined);
+});
+
 test("saving commits the selected folder with the case and preserves snapshot semantics", async () => {
   const { cases, storage } = await setup();
   seedWorkspace(storage, [action("s1")]);
@@ -883,4 +905,43 @@ test("saving rejects overlong and non-text names before changing storage", async
     assert.deepEqual(storage.data, before);
   }
   assert.equal((await cases.save("x".repeat(120))).success, true);
+});
+
+test("a saved case's annotation can be edited later without touching its steps", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("s1"), action("s2")]);
+  const saved = await cases.save("Annotated later");
+  const caseId = saved.case.id;
+  const stepsBefore = structuredClone(storage.data[`case:${caseId}`].actions);
+
+  const result = await cases.updateIntent(caseId, {
+    steps: [{ id: "s1", title: "登录", afterStep: 1, goal: "登录后能看到工作台", checks: ["进入工作台"] }]
+  });
+  assert.equal(result.success, true);
+  assert.equal(storage.data[`case:${caseId}`].intent.goal, undefined);
+  assert.equal(storage.data[`case:${caseId}`].intent.steps[0].goal, "登录后能看到工作台");
+  assert.deepEqual(storage.data[`case:${caseId}`].actions, stepsBefore);
+  // A case that is not in the index is reported, not silently created.
+  const missing = await cases.updateIntent("case_missing", { goal: "x" });
+  assert.equal(missing.success, false);
+});
+
+test("annotating a saved workspace persists the same case and rejects stale edits", async () => {
+  const { cases, storage } = await setup();
+  seedWorkspace(storage, [action("s1"), action("s2")]);
+  const saved = await cases.save("Saved baseline");
+  const intent = { steps: [{ id: "s1", start: 1, end: 2, goal: "Verify attachment" }] };
+
+  const edited = await cases.saveWorkspaceIntent(intent, { expectedActionIds: ["s1", "s2"], expectedIntent: null });
+  assert.equal(edited.success, true);
+  assert.equal(storage.data.activeCaseId, saved.case.id);
+  assert.deepEqual((await cases.getDetails(saved.case.id)).case.intent, edited.intent);
+  assert.deepEqual(storage.data.workspaceIntent, edited.intent);
+  assert.equal((await cases.saveWorkspaceIntent(null, { expectedActionIds: ["s2"] })).success, false);
+  assert.equal((await cases.saveWorkspaceIntent(null, { expectedIntent: null })).success, false);
+
+  await cases.load(saved.case.id);
+  assert.deepEqual(storage.data.workspaceIntent, edited.intent);
+  await cases.remove(saved.case.id);
+  assert.equal(storage.data.workspaceIntent, null);
 });

@@ -1,4 +1,4 @@
-/** Fullscreen library for saved recordings and read-only step previews. */
+/** Fullscreen library and detail view for saved recordings. */
 import { createConsolePreview } from "./app/console-preview.js";
 import { bindThemeToggle } from "./lib/theme.js";
 
@@ -64,12 +64,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     exportDocumentsButton: document.getElementById("batch-export-cases-btn"),
     deleteCasesButton: document.getElementById("batch-delete-cases-btn"),
     fileInput: document.getElementById("case-package-file-input"),
-    onOpenCase: summary => preview.showCasePreview(summary).catch(error => reportError(error.message))
+    onOpenCase: (summary, options) => preview.showCasePreview(summary, options).catch(error => reportError(error.message))
   });
 
   window.addEventListener("unload", () => {
     workbench.dispose();
-    preview.previewStepView.dispose();
+    preview.disposePreview();
   });
 
   await workbench.refresh().catch(error => reportError(error.message));

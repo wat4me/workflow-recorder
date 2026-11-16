@@ -138,11 +138,11 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: var(--control-h);
+  height: var(--control-h);
   background: var(--button-bg, var(--bg-primary));
   border: 1px solid var(--button-border, var(--border-color));
-  border-radius: var(--radius-sm);
+  border-radius: var(--control-radius);
   color: var(--button-text, var(--text-secondary));
   cursor: pointer;
   transition: var(--transition-fast);
@@ -150,7 +150,7 @@ body {
 
 .language-btn {
   width: auto;
-  min-width: 30px;
+  min-width: var(--control-h);
   padding: 0 7px;
   font-size: 10px;
   font-weight: 700;

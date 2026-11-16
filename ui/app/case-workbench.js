@@ -157,6 +157,11 @@ if (!globalThis.RecorderCaseWorkbench) {
         } catch (error) { reportError(error.message); }
       });
       rename.addEventListener("dragstart", event => event.stopPropagation());
+      // Annotations can be added or corrected long after recording.
+      const annotate = actionButton("intent", t("intentAnnotationTitle", [], "标注意图"), iconSvg("annotation"));
+      annotate.setAttribute("aria-label", `${t("intentAnnotationTitle", [], "标注意图")}「${caseRecord.name}」`);
+      annotate.addEventListener("dragstart", event => event.stopPropagation());
+      annotate.addEventListener("click", () => onOpenCase(caseRecord, { annotate: true }));
       const move = actionButton(
         "move", t("moveCaseToFolder", [], "移动至"),
         iconSvg("folderCheck")
@@ -200,7 +205,7 @@ if (!globalThis.RecorderCaseWorkbench) {
         if (response.cleanupPending) notify(t("screenshotCleanupDeferred", [], "用例已删除，截图将在后台重试清理"));
       });
       remove.addEventListener("dragstart", event => event.stopPropagation());
-      actions.append(rename, move, remove);
+      actions.append(rename, annotate, move, remove);
       item.classList.toggle("is-selected", checkbox.checked);
       const symbol = document.createElement("span");
       symbol.className = "library-item-symbol";

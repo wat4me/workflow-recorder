@@ -3,6 +3,8 @@
  *
  * Version 1 kept every saved case in a single `cases` array. Version 2 splits
  * that into `caseIndex`, `caseMedia:<id>` and `case:<id>` (see case-store.js).
+ * Version 3 adds the optional `intent` annotation to a case's detail record;
+ * it is additive, so a v2 profile only needs its version number rewritten.
  *
  * This is the first version bump with a real migration path. Earlier builds
  * deliberately had none and failed loudly instead, but that answer only works
@@ -12,13 +14,13 @@
  * `schemaVersion`.
  *
  * Bump SCHEMA_VERSION whenever the shape of `actions` or the case store changes
- * in a way older builds cannot read, and add the old number to MIGRATABLE_FROM
- * together with a deterministic, resumable conversion.
+ * in a way older builds cannot read, and add the old number to
+ * MIGRATABLE_FROM together with a deterministic, resumable conversion.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** Versions this build can convert forward from. */
-export const MIGRATABLE_FROM = new Set([1]);
+export const MIGRATABLE_FROM = new Set([1, 2]);
 
 /**
  * Validates a saved case before it is loaded into the workspace. Without this,

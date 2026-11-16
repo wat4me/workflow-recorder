@@ -404,6 +404,62 @@ test("A B C tabs keep independent drafts while recorded child tabs share their p
   assert.deepEqual((await readActions(worker)).map(action => action.id), bState.actions.map(action => action.id), "a closed tab's recording can be recovered through the recovery entry");
 });
 
+test("continuing a saved case brings its steps and annotations into the selected tab", async t => {
+  const fixture = await startFixtureServer();
+  t.after(() => fixture.close());
+  const extensionPath = path.resolve(__dirname, "..");
+  const context = await chromium.launchPersistentContext("", {
+    channel: "chromium", headless: true, reducedMotion: "reduce",
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  t.after(() => context.close());
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent("serviceworker");
+  const extensionUrl = `chrome-extension://${new URL(worker.url()).host}`;
+  const target = await context.newPage();
+  await target.goto(`${fixture.origin}/base`);
+  const targetId = await worker.evaluate(async url => (await chrome.tabs.query({})).find(tab => tab.url === url).id, target.url());
+
+  const previousStep = { id: "saved-first", type: "click", timestamp: Date.now(), pageName: "page1",
+    url: target.url(), target: { tagName: "button", role: "button", accessibleName: "已有操作" } };
+  const annotation = { id: "saved-stage", start: 1, end: 1, title: "原有标注" };
+  await writeActions(worker, [previousStep]);
+  await worker.evaluate(annotation => chrome.storage.local.set({ isRecording: false, uiLanguage: "zh_CN",
+    recordingConsentVersion: 3, captureSettings: { screenshots: false }, workspaceIntent: { steps: [annotation] }
+  }), annotation);
+
+  const workbench = await context.newPage();
+  await workbench.goto(`${extensionUrl}/ui/console.html`);
+  const saved = await workbench.evaluate(() => chrome.runtime.sendMessage({ action: "saveCase", name: "继续录制回归用例" }));
+  assert.equal(saved.success, true, saved.error);
+  await workbench.goto(`${extensionUrl}/ui/console.html?caseId=${saved.case.id}`);
+  await workbench.locator("#preview-continue-btn").click();
+  await workbench.locator(`input[name="continue-target-tab"][value="${targetId}"]`).check();
+  await workbench.locator("#target-tab-confirm").click();
+  await workbench.locator("#target-tab-modal").waitFor({ state: "hidden" });
+  await workbench.getByText("已加载用例，请在目标页面侧边栏中继续录制", { exact: true }).waitFor();
+
+  const draft = await workbench.evaluate(tabId => chrome.runtime.sendMessage({ action: "getDraftState", tabId }), targetId);
+  assert.equal(draft.state.activeCaseId, saved.case.id);
+  assert.deepEqual(draft.actions.map(action => action.id), [previousStep.id]);
+  assert.equal(draft.state.workspaceIntent.steps[0].title, annotation.title);
+
+  const panel = await context.newPage();
+  await worker.evaluate(tabId => chrome.tabs.update(tabId, { active: true }), targetId);
+  await panel.goto(`${extensionUrl}/ui/popup.html`);
+  await panel.locator(".step-intent-group").getByText(annotation.title, { exact: true }).waitFor();
+  await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
+  assert.equal((await panel.locator("#record-btn-label").innerText()).trim(), "继续录制");
+  await panel.locator("#record-btn").click();
+  await waitForRecorder(worker, target.url());
+  await target.locator("#scripted-click-target").click();
+  const actions = await waitForActions(worker, list => list.some(action => action.target?.id === "scripted-click-target"));
+  assert.deepEqual(actions.map(action => action.type), ["click", "click"]);
+  assert.equal(actions[0].id, previousStep.id);
+  await panel.waitForFunction(() => !document.getElementById("record-btn").disabled);
+  await panel.locator("#record-btn").click();
+  await waitForCondition(async () => !(await worker.evaluate(() => chrome.storage.local.get("isRecording"))).isRecording, "recording stopped");
+});
+
 test("the recording scope lists joined pages and can add a page from another window", async t => {
   const fixture = await startFixtureServer();
   t.after(() => fixture.close());
@@ -451,7 +507,7 @@ test("the recording scope lists joined pages and can add a page from another win
   await scope.waitFor();
   await status.filter({ hasText: "当前页面在录制范围内" }).waitFor();
   await scope.locator("summary").click();
-  await scope.locator("li").filter({ hasText: "page1" }).waitFor();
+  await scope.locator("li").filter({ hasText: "标签页 1" }).waitFor();
   await focus(panelTabId);
   await status.filter({ hasText: "当前页面未加入录制" }).waitFor();
   await other.locator("#scripted-click-target").click();
@@ -459,7 +515,7 @@ test("the recording scope lists joined pages and can add a page from another win
   await scope.locator("#join-recording-page").click();
   await scope.locator("#join-recording-page-select").selectOption(String(otherTabId));
   await scope.locator("#join-recording-page-confirm").click();
-  await scope.locator("li").filter({ hasText: "page2" }).waitFor();
+  await scope.locator("li").filter({ hasText: "标签页 2" }).waitFor();
   await focus(rootTabId);
   await status.filter({ hasText: "当前页面在录制范围内" }).waitFor();
   await other.locator("#effect-action").click();
@@ -1511,8 +1567,10 @@ test("step header controls share one center line in the recorder and preview", a
       await page.waitForFunction(selector => document.querySelectorAll(`${selector} .step-card`).length === 12, container);
       if (page === panel) {
         const headings = panel.locator(".step-page-heading:visible");
-        assert.deepEqual(await headings.locator(".step-page-name").allTextContents(), ["page1", "page2", "page1"]);
+        const tab = language === "zh_CN" ? "标签页" : "Tab";
+        assert.deepEqual(await headings.locator(".step-page-name").allTextContents(), [`${tab} 1`, `${tab} 2`, `${tab} 1`]);
         assert.deepEqual(await headings.locator(".step-page-title").allTextContents(), ["Main page", "Popup", "Main page"]);
+        assert.equal(await headings.first().locator(".step-page-label > :first-child").textContent(), "Main page");
         const tones = await panel.locator(".step-card").evaluateAll(cards =>
           cards.map(card => getComputedStyle(card).getPropertyValue("--step-page-color").trim())
         );
@@ -1524,6 +1582,9 @@ test("step header controls share one center line in the recorder and preview", a
         ["step-rename-btn", "step-screenshots-toggle", "step-delete-btn"]);
         const plainRow = await panel.locator(".step-card").nth(3).boundingBox();
         assert.ok(plainRow.height >= 36 && plainRow.height <= 40, "a single-line step has vertical breathing room");
+      } else {
+        const tab = language === "zh_CN" ? "标签页" : "Tab";
+        assert.equal(await preview.locator(".step-page-tag").nth(5).textContent(), `${tab} 2`);
       }
       for (const width of [300, 360, 600, 1000]) {
         await page.setViewportSize({ width, height: 800 });
@@ -1532,13 +1593,17 @@ test("step header controls share one center line in the recorder and preview", a
             const select = element.querySelector("#step-select-all").getBoundingClientRect();
             const first = document.querySelector(".step-select-checkbox").getBoundingClientRect();
             const title = element.querySelector(".steps-section-title").getBoundingClientRect();
+            const annotateButton = element.querySelector("#intent-btn");
+            const annotate = annotateButton.getBoundingClientRect();
             const clear = element.querySelector("#clear-steps-btn").getBoundingClientRect();
             const bounds = element.getBoundingClientRect();
             const list = document.querySelector("#steps-container").getBoundingClientRect();
             const style = getComputedStyle(element);
             return {
               aligned: Math.abs(select.left - first.left) < 1 && select.right < title.left &&
-                title.right < clear.left && clear.right <= bounds.right,
+                title.right < annotate.left && annotate.right < clear.left && clear.right <= bounds.right &&
+                Math.abs(annotate.top - clear.top) < 1 &&
+                annotateButton.innerText.trim() === (document.documentElement.lang === "zh-CN" ? "标注意图" : "Annotate intent"),
               flat: style.borderTopWidth === "0px" && style.boxShadow === "none" &&
                 style.backgroundColor === "rgba(0, 0, 0, 0)",
               fillsPanel: list.left <= 4 && innerWidth - list.right <= 4 &&
@@ -1580,10 +1645,12 @@ test("step header controls share one center line in the recorder and preview", a
   await panel.locator(".step-delete-btn").first().click();
   await panel.locator(".confirm-cancel").click();
   assert.equal(await panel.locator(".step-card").count(), 12);
-  assert.equal(await preview.locator(".step-select-checkbox, .step-page-checkbox, .step-rename-btn, .step-delete-btn").count(), 0);
+  // The saved-case preview can check steps to annotate them, but never edits
+  // or deletes them.
+  assert.equal(await preview.locator(".step-page-checkbox, .step-rename-btn, .step-delete-btn").count(), 0);
 
-  const page1 = panel.getByRole("checkbox", { name: "Select all steps on page1" });
-  const page2 = panel.getByRole("checkbox", { name: "Select all steps on page2" });
+  const page1 = panel.getByRole("checkbox", { name: "Select all steps on Tab 1" });
+  const page2 = panel.getByRole("checkbox", { name: "Select all steps on Tab 2" });
   assert.equal(await page1.count(), 2, "each visit to the same page has a checkbox");
   assert.deepEqual(await page1.evaluateAll(boxes => boxes.map(box => box.indeterminate)), [true, true]);
   assert.equal(await page2.isChecked(), false);
@@ -1591,16 +1658,16 @@ test("step header controls share one center line in the recorder and preview", a
   assert.equal(await page1.last().isChecked(), true);
   assert.equal(await panel.locator(".step-select-checkbox:checked").count(), 8);
 
-  await panel.getByRole("button", { name: "Collapse page1 (3 steps)" }).click();
+  await panel.getByRole("button", { name: "Collapse Tab 1 (3 steps)" }).click();
   assert.deepEqual(await panel.locator(".step-index:visible").allTextContents(), ["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
-  await panel.getByRole("button", { name: "Collapse page1 (5 steps)" }).click();
+  await panel.getByRole("button", { name: "Collapse Tab 1 (5 steps)" }).click();
   assert.deepEqual(await panel.locator(".step-index:visible").allTextContents(), ["6", "7", "8", "9"]);
   assert.equal(await page1.first().isChecked(), true);
   assert.equal((await readActions(worker)).length, 12);
-  await panel.getByRole("button", { name: "Expand page1 (3 steps)" }).press("Enter");
+  await panel.getByRole("button", { name: "Expand Tab 1 (3 steps)" }).press("Enter");
   assert.deepEqual(await panel.locator(".step-index:visible").allTextContents(), ["6", "7", "8", "9", "10", "11", "12"]);
-  assert.equal(await panel.getByRole("button", { name: "Expand page1 (5 steps)" }).getAttribute("aria-expanded"), "false");
-  await panel.getByRole("button", { name: "Expand page1 (5 steps)" }).click();
+  assert.equal(await panel.getByRole("button", { name: "Expand Tab 1 (5 steps)" }).getAttribute("aria-expanded"), "false");
+  await panel.getByRole("button", { name: "Expand Tab 1 (5 steps)" }).click();
   assert.equal(await panel.locator(".step-select-checkbox:checked").count(), 8);
   assert.equal(await panel.locator(".step-index:visible").count(), 12);
 
@@ -2012,14 +2079,16 @@ test("recording controls use the light theme and expose icon descriptions at eve
     await panel.screenshot({ path: path.join(__dirname, "..", ".local", "recorder-icon-controls.png") });
   }
 
-  // Motion is opt-in to the normal preference, not required for visible hover.
+  // Hover changes the surface only: the button never moves, so a row of mixed
+  // buttons cannot jump under the pointer.
   await panel.emulateMedia({ reducedMotion: "no-preference" });
-  await panel.locator("#record-btn").hover();
-  await waitForCondition(async () => await panel.locator("#record-btn").evaluate(button => getComputedStyle(button).translate) === "0px -1px", "shared hover lift");
-  await panel.mouse.down();
-  await waitForCondition(async () => await panel.locator("#record-btn").evaluate(button => getComputedStyle(button).translate) === "0px", "pressed button returns to its baseline");
   await panel.mouse.move(0, 0);
-  await panel.mouse.up();
+  const restingBackground = await panel.locator("#record-btn").evaluate(button => getComputedStyle(button).backgroundColor);
+  await panel.locator("#record-btn").hover();
+  await waitForCondition(async () => await panel.locator("#record-btn").evaluate(button =>
+    getComputedStyle(button).backgroundColor) !== restingBackground, "shared hover surface");
+  assert.equal(await panel.locator("#record-btn").evaluate(button => getComputedStyle(button).translate), "none");
+  await panel.mouse.move(0, 0);
   // The actionbar no longer opens with a text field, so reach the save button
   // from whatever precedes it in the tab order.
   await panel.evaluate(() => {
@@ -2065,11 +2134,11 @@ test("recording controls use the light theme and expose icon descriptions at eve
     await panel.screenshot({ path: path.join(process.env.TEMP, "opencode", "light-theme-panel.png") });
   }
 
+  // The header toggle is the one theme control; the settings dialog no longer
+  // duplicates it.
   const setTheme = async (page, theme) => {
-    await page.locator("#capture-settings-btn").click();
-    await page.locator("#ui-theme").selectOption(theme);
-    await page.locator(".capture-settings-dialog .confirm-submit").click();
-    await page.locator(".capture-settings-dialog").waitFor({ state: "detached" });
+    const current = await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+    if (current !== theme) await page.locator("#theme-toggle-btn").click();
   };
   const waitForTheme = (page, theme) => page.waitForFunction(value =>
     getComputedStyle(document.documentElement).colorScheme === value, theme);

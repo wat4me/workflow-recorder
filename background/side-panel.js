@@ -52,21 +52,6 @@ export function createSidePanelController({ isRecordableTab }) {
     });
   }
 
-  /**
-   * Brings the panel up on a tab the user picked in the workbench's
-   * continue-recording dialog. Full recording injection belongs to session start.
-   */
-  async function prepareForTab(tabId) {
-    if (!Number.isInteger(tabId)) return { success: false, error: "Invalid target tab" };
-    const tab = await chrome.tabs.get(tabId);
-    if (!isRecordableTab(tab)) return { success: false, error: "目标页面不可录制" };
-    await chrome.sidePanel.setOptions({ tabId, path: PANEL_PATH, enabled: true });
-    await ensurePageFitScript(tabId);
-    await chrome.tabs.update(tabId, { active: true });
-    await chrome.sidePanel.open({ tabId });
-    return { success: true, tabId, windowId: tab.windowId };
-  }
-
   async function setLayout({ open, tabId, windowId }) {
     if (!Number.isInteger(windowId)) return { success: false };
 
@@ -128,5 +113,5 @@ export function createSidePanelController({ isRecordableTab }) {
     return true;
   }
 
-  return { openForTab, prepareForTab, setLayout, trackLayoutPort };
+  return { openForTab, setLayout, trackLayoutPort };
 }

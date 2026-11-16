@@ -22,9 +22,11 @@
 .folder-menu, .more-actions-menu, .confirm-dialog { border-color: var(--border-color); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
 .confirm-content h3 { color: var(--text-primary); font-size: 17px; font-weight: 600; }
 .confirm-content p { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
-.confirm-actions button { min-height: 36px; border-radius: var(--radius-sm); font: 600 13px/1.4 var(--font-ui); }
-.confirm-actions .confirm-submit { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
-.confirm-actions .confirm-submit:hover { background: var(--accent-hover); }
+.confirm-actions button { min-height: var(--control-h); border-radius: var(--control-radius); font: 600 12.5px/1 var(--font-ui); }
+/* The workbench's static target-page dialog keeps its own class names so the
+   page never holds a second, hidden .confirm-submit. */
+.confirm-actions :is(.confirm-submit, .target-tab-submit) { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
+.confirm-actions :is(.confirm-submit, .target-tab-submit):hover:not(:disabled) { background: var(--accent-hover); }
 .confirm-actions .confirm-submit.danger { background: var(--danger-fill); border-color: var(--danger-fill); color: #fff; }
 .confirm-actions .confirm-submit.danger:hover { background: var(--danger-hover); }
 .confirm-icon:not(.danger) { color: var(--accent-color); background: var(--accent-light); }

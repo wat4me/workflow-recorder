@@ -32,7 +32,23 @@
     return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
   }
 
-  /** Exports selected saved cases with their actions, lineage and image blobs. */
+  // Older packages included per-step data rules and a ZIP attachment.
+  function caseIntent(intent) {
+    if (!intent) return null;
+    if (typeof intent !== "object" || Array.isArray(intent) ||
+        (intent.steps !== undefined && (!Array.isArray(intent.steps) || intent.steps.length > 500))) {
+      throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+    }
+    const copy = structuredClone(intent);
+    for (const step of copy.steps || []) {
+      if (!step || typeof step !== "object") continue;
+      delete step.dataValues;
+      delete step.filePool;
+    }
+    return copy;
+  }
+
+  /** Exports selected saved cases with their actions, lineage and media. */
   async function exportCasePackage(cases, archiveName) {
     const archive = await buildCasePackage(cases, { asBlob: true });
     if (!archive) return;
@@ -53,9 +69,9 @@
     const assets = [];
     const assetBySourceKey = new Map();
 
-    async function attachAsset(action, keyField, assetField) {
-      const sourceKey = action[keyField];
-      delete action[keyField];
+    async function attachAsset(record, keyField, assetField) {
+      const sourceKey = record[keyField];
+      delete record[keyField];
       if (!sourceKey) return;
 
       let assetId = assetBySourceKey.get(sourceKey);
@@ -63,8 +79,8 @@
         const blob = await globalThis.RecorderBridge.getBlob(sourceKey);
         if (!blob) {
           if (keyField === "screenshotKey") {
-            action.screenshotStatus = "failed";
-            action.screenshotErrorReason = "captureFailed";
+            record.screenshotStatus = "failed";
+            record.screenshotErrorReason = "captureFailed";
           }
           return;
         }
@@ -75,7 +91,7 @@
         assets.push({ id: assetId, path, type, size: blob.size });
         assetBySourceKey.set(sourceKey, assetId);
       }
-      action[assetField] = assetId;
+      record[assetField] = assetId;
     }
 
     try {
@@ -88,12 +104,14 @@
           await attachAsset(action, "screenshotKey", "screenshotAsset");
           actions.push(action);
         }
+        const intent = caseIntent(source.intent);
         packagedCases.push({
           id: String(source.id || `case-${packagedCases.length + 1}`),
           name: String(source.name || t("unnamedCase", [], "未命名用例")).slice(0, 120),
           createdAt: Number(source.createdAt) || Date.now(),
           lineage: source.lineage || null,
           pages: Array.isArray(source.pages) ? structuredClone(source.pages) : [],
+          ...(intent ? { intent } : {}),
           actions
         });
       }
@@ -108,6 +126,7 @@
       };
       await writer.add(MANIFEST_PATH, globalThis.fflate.strToU8(JSON.stringify(manifest)), true);
       const archive = writer.finish();
+      if (archive.size > MAX_ARCHIVE_BYTES) throw packageError("errorCasePackageTooLarge", "用例包过大，无法导入");
       // Keep the programmatic byte-array API; browser downloads use Blob directly.
       return asBlob ? archive : new Uint8Array(await archive.arrayBuffer());
     } catch (error) { writer.abort(); throw error; }
@@ -136,16 +155,19 @@
     const stamp = uniqueToken();
     const assetsById = new Map();
     for (const asset of manifest.assets || []) {
+      // Legacy file pools are skipped. Only screenshots can be referenced by actions.
+      if (asset?.type === "application/zip" && /^media\/[a-z0-9._-]+\.zip$/i.test(asset.path || "")) continue;
+      const file = files[asset?.path];
       if (
         !asset || typeof asset.id !== "string" || assetsById.has(asset.id) ||
         !/^media\/[a-z0-9._-]+$/i.test(asset.path || "") ||
         !/^image\/(?:jpeg|png|webp)$/.test(asset.type || "") ||
-        !files[asset.path] || files[asset.path].size > MAX_ASSET_BYTES
+        !file || file.size > MAX_ASSET_BYTES
       ) {
         throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
       }
       assetsById.set(asset.id, {
-        key: files[asset.path].key,
+        key: file.key,
         type: asset.type
       });
     }
@@ -173,6 +195,14 @@
     }));
 
     const referencedAssets = new Set();
+    function requireAsset(id) {
+      const asset = assetsById.get(id);
+      if (!asset) {
+        throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
+      }
+      referencedAssets.add(id);
+      return asset.key;
+    }
     let totalSteps = 0;
     const importedAt = Date.now();
     const cases = manifest.cases.map((source, caseIndex) => {
@@ -190,16 +220,10 @@
         delete action.screenshotKey;
 
         if (action.screenshotBeforeAsset) {
-          const asset = assetsById.get(action.screenshotBeforeAsset);
-          if (!asset) throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
-          referencedAssets.add(action.screenshotBeforeAsset);
-          action.screenshotBeforeKey = asset.key;
+          action.screenshotBeforeKey = requireAsset(action.screenshotBeforeAsset);
         }
         if (action.screenshotAsset) {
-          const asset = assetsById.get(action.screenshotAsset);
-          if (!asset) throw packageError("errorInvalidCasePackage", "这不是有效的流程录制用例包");
-          referencedAssets.add(action.screenshotAsset);
-          action.screenshotKey = asset.key;
+          action.screenshotKey = requireAsset(action.screenshotAsset);
           action.screenshotStatus = "captured";
           delete action.screenshotError;
           delete action.screenshotErrorReason;
@@ -210,6 +234,7 @@
         return action;
       });
 
+      const intent = caseIntent(source.intent);
       const sourceParentId = source.lineage?.parentCaseId;
       let lineage = null;
       if (sourceParentId && caseIdMap.has(sourceParentId)) {
@@ -225,6 +250,7 @@
         createdAt: importedAt + caseIndex,
         lineage,
         pages: structuredClone(source.pages),
+        ...(intent ? { intent } : {}),
         actions
       };
     });
@@ -258,7 +284,8 @@
     try {
       await globalThis.RecorderArchiveStream.readEntries(file, {
         maxEntries: MAX_ENTRIES, maxBytes: MAX_UNPACKED_BYTES, maxEntryBytes: MAX_ASSET_BYTES,
-        keep: name => name === MANIFEST_PATH || name === LEGACY_MANIFEST_PATH || /^media\/[a-z0-9._-]+$/i.test(name),
+        keep: name => name === MANIFEST_PATH || name === LEGACY_MANIFEST_PATH
+          || (/^media\/[a-z0-9._-]+$/i.test(name) && !/\.zip$/i.test(name)),
         onEntry: async (name, blob) => {
           if (name === MANIFEST_PATH || name === LEGACY_MANIFEST_PATH) {
             files[name] = new Uint8Array(await blob.arrayBuffer());
@@ -266,7 +293,7 @@
             const key = `import:${stamp}:asset-${stagedKeys.length + 1}`;
             const type = name.endsWith(".png") ? "image/png" : name.endsWith(".webp") ? "image/webp" : "image/jpeg";
             stagedKeys.push(key);
-            files[name] = { key, size: blob.size, type };
+            files[name] = { key, size: blob.size };
             await globalThis.RecorderMediaStore.putBlob(key, new Blob([blob], { type }));
           }
         }

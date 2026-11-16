@@ -10,7 +10,7 @@
  * The record is now split by access pattern:
  *
  *   caseIndex          metadata only, read on every list/summary query
- *   caseMedia:<id>     that case's deduplicated screenshot keys, read only by
+ *   caseMedia:<id>     that case's deduplicated media keys, read only by
  *                      media cleanup
  *   case:<id>          actions and pages, read only to load, preview or export
  *
@@ -59,6 +59,11 @@ export function screenshotKeysOf(actions) {
   return [...new Set(keys)];
 }
 
+export function isIntentPoolKey(key) {
+  // Old case and draft media indexes can still contain retired attachment keys.
+  return typeof key === "string" && (key.startsWith("intent-pool:") || key.startsWith("intent-pool-"));
+}
+
 /**
  * Newest first, and total: two cases saved in the same millisecond still get a
  * stable order, which is what lets a keyset cursor page through the index
@@ -103,11 +108,15 @@ export function indexEntryFor(caseRecord) {
 }
 
 export function detailRecordFor(caseRecord) {
+  const intent = sanitizeIntent(caseRecord.intent, caseRecord.actions?.length);
   return {
     id: caseRecord.id,
     actions: caseRecord.actions,
     pages: caseRecord.pages,
     ...(Array.isArray(caseRecord.flowEdges) ? { flowEdges: caseRecord.flowEdges } : {}),
+    // Tester-authored annotations. Absent when the case predates the field (or
+    // was never annotated), which is what keeps the export unchanged for them.
+    ...(intent ? { intent } : {}),
     // Validate legacy scene provenance while preserving its saved steps.
     ...(caseRecord.kind === "scene"
       ? { composition: sanitizeComposition(caseRecord.composition, caseRecord.actions.length) }
@@ -115,8 +124,155 @@ export function detailRecordFor(caseRecord) {
   };
 }
 
+const INTENT_TEXT_LIMIT = 2000;
+const INTENT_STEP_TEXT_LIMIT = 1000;
+const INTENT_CHECK_LIMIT = 20;
+const INTENT_MAX_STEPS = 500;
+/**
+ * Normalises the annotation layer a recorder fills in by hand.
+ *
+ * The model is the tester's: one annotation per test step covering an explicit
+ * range of recorded steps. The step owns its goal, preconditions, purpose,
+ * verification points and pass criteria, because one recording can span several
+ * unrelated features.
+ *
+ * `start`/`end` are 1-based indexes into the recording. A step inserted at the
+ * end starts one past the last step (`end` < `start`) and is marked `open`:
+ * it grows to cover whatever is recorded next, which is how "pause, insert,
+ * annotate, resume" works. Anything out of range is clamped -- an annotation is
+ * never a reason to lose a case -- and a step that would overlap the previous
+ * one is dropped rather than silently reordered.
+ */
+export function sanitizeIntent(intent, stepCount = 0) {
+  if (!intent || typeof intent !== "object" || Array.isArray(intent)) return null;
+  const text = (value, limit = INTENT_TEXT_LIMIT) =>
+    typeof value === "string" ? value.trim().slice(0, limit) : "";
+  const total = Number.isInteger(stepCount) && stepCount > 0 ? stepCount : 0;
+  const maxStart = total + 1;
+
+  const result = {};
+  // `note` and the first iteration's `goal` used to be one case-level field.
+  // They are now owned by each test step; keep the old value only for the
+  // migration below, never as a document-level section. A recording can cover
+  // several unrelated features, so one global goal would contradict the steps
+  // that actually verify them.
+  const legacyGoal = text(intent.note) || text(intent.goal);
+  const legacySetup = text(intent.setup);
+  const legacyPass = text(intent.pass);
+  const linesOf = value => (Array.isArray(value) ? value
+    : typeof value === "string" ? value.split(/\r?\n/) : [])
+    .map(line => text(line, INTENT_STEP_TEXT_LIMIT)).filter(Boolean).slice(0, INTENT_CHECK_LIMIT);
+
+  const seen = new Set();
+  const steps = [];
+  for (const [index, step] of (Array.isArray(intent.steps) ? intent.steps : []).entries()) {
+    if (!step || typeof step !== "object") continue;
+    const rawStart = Number.isInteger(step.start) ? step.start
+      : Number.isInteger(step.afterStep) ? step.afterStep + 1 : 1;
+    const start = Math.min(Math.max(rawStart, 1), maxStart);
+    if (seen.has(start)) continue;
+    const goal = text(step.goal);
+    const preconditions = linesOf(step.preconditions);
+    const checks = linesOf(step.checks);
+    const pass = linesOf(step.pass);
+    const entry = {
+      id: typeof step.id === "string" && step.id ? step.id.slice(0, 64) : `step-${index + 1}`,
+      title: text(step.title, 120),
+      start,
+      // Until the ends are derived below, keep the raw value (may be absent).
+      end: Number.isInteger(step.end) ? step.end : null,
+      open: step.open === true,
+      note: text(step.note, INTENT_STEP_TEXT_LIMIT),
+      goal,
+      preconditions,
+      checks,
+      pass,
+      ignore: step.ignore === true
+    };
+    const purpose = text(step.purpose, INTENT_STEP_TEXT_LIMIT);
+    if (purpose) entry.purpose = purpose;
+    // Kept even when empty: a test step the tester inserted at the end is a
+    // placeholder that the steps recorded next belong to, and its annotation is
+    // filled in later. Only duplicate starts are dropped.
+    seen.add(start);
+    steps.push(entry);
+  }
+
+  const sorted = steps.sort((a, b) => a.start - b.start).slice(0, INTENT_MAX_STEPS);
+  const kept = [];
+  for (const [position, step] of sorted.entries()) {
+    const next = sorted[position + 1];
+    // An explicit end wins; a missing one means "up to the step before the next
+    // test step", and the last one runs to the end of the recording.
+    const rawEnd = step.open && next ? next.start - 1
+      : step.end === null ? (next ? next.start - 1 : total) : step.end;
+    let end = Math.min(Math.max(rawEnd, step.start - 1), total);
+    // Overlapping the previous test step is the one thing that cannot be
+    // represented, so the later test step yields.
+    const previous = kept[kept.length - 1];
+    if (previous && step.start <= previous.end) continue;
+    const open = !next && (step.open || (step.end === null && end === total));
+    if (open) end = total;
+    kept.push({ ...step, end, open });
+  }
+  result.steps = kept;
+
+  // Migrate the old global values into the first test step so they are not
+  // lost. The tester can move them to the step they actually belong to; the
+  // document no longer prints a global goal, preconditions or pass criteria.
+  if (legacyGoal) {
+    if (kept.length > 0) {
+      if (!kept.some(step => step.goal)) kept[0].goal = legacyGoal;
+    } else {
+      result.note = legacyGoal;
+    }
+  }
+  if (legacySetup) {
+    if (kept.length > 0) {
+      if (!kept.some(step => step.preconditions.length > 0)) {
+        kept[0].preconditions = linesOf(legacySetup);
+      }
+    } else {
+      result.setup = legacySetup;
+    }
+  }
+  if (legacyPass) {
+    if (kept.length > 0) {
+      if (!kept.some(step => step.pass.length > 0)) {
+        kept[0].pass = linesOf(legacyPass);
+      }
+    } else {
+      result.pass = legacyPass;
+    }
+  }
+
+  const hasContent = Object.entries(result)
+    .some(([key, value]) => key !== "steps" && value) || result.steps.length > 0;
+  return hasContent ? result : null;
+}
+
 function legacyEntry(caseRecord) {
   return { ...indexEntryFor(caseRecord), legacy: true };
+}
+
+/**
+ * Rewrites one case's annotation, leaving its steps untouched.
+ *
+ * Keep the media references and any linked workspace in the same commit.
+ */
+export async function updateIntent(caseId, intent, { workspaceKey } = {}) {
+  const detail = await readDetail(caseId);
+  if (!detail) return undefined;
+  const clean = sanitizeIntent(intent, detail.actions?.length);
+  const next = { ...detail };
+  if (clean) next.intent = clean;
+  else delete next.intent;
+  await chrome.storage.local.set({
+    ...(workspaceKey ? { [workspaceKey]: clean } : {}),
+    [detailKey(caseId)]: next,
+    [mediaKey(caseId)]: screenshotKeysOf(next.actions)
+  });
+  return clean;
 }
 
 /**
@@ -176,7 +332,8 @@ export async function readReferencedScreenshotKeys({ excluding = null } = {}) {
 
   const keys = considered.map(entry => mediaKey(entry.id));
   const stored = await chrome.storage.local.get(keys);
-  return new Set(keys.flatMap(key => stored[key] || []));
+  const referenced = keys.flatMap(key => stored[key] || []);
+  return new Set(referenced.filter(key => !isIntentPoolKey(key)));
 }
 
 /**
@@ -195,7 +352,8 @@ export async function readCaseScreenshotKeys(caseIds) {
   const keys = [];
   for (const id of ids) {
     const listed = stored[mediaKey(id)];
-    keys.push(...(listed || screenshotKeysOf((await readDetail(id))?.actions)));
+    const screenshots = listed || screenshotKeysOf((await readDetail(id))?.actions);
+    keys.push(...screenshots.filter(key => !isIntentPoolKey(key)));
   }
   return [...new Set(keys)];
 }
@@ -213,11 +371,12 @@ export async function writeCase(caseRecord, extraWrites = {}) {
   const entry = indexEntryFor(caseRecord);
   const index = await readIndex();
   const nextIndex = sortIndex([...index.filter(item => item.id !== entry.id), entry]);
+  const detail = detailRecordFor(caseRecord);
   await chrome.storage.local.set({
     ...extraWrites,
     [INDEX_KEY]: nextIndex,
-    [detailKey(entry.id)]: detailRecordFor(caseRecord),
-    [mediaKey(entry.id)]: screenshotKeysOf(caseRecord.actions)
+    [detailKey(entry.id)]: detail,
+    [mediaKey(entry.id)]: screenshotKeysOf(detail.actions)
   });
   return entry;
 }
@@ -244,10 +403,10 @@ export async function writeCases(caseRecords) {
     ])
   };
   for (let index = 0; index < records.length; index++) {
-    const record = records[index];
     const entry = entries[index];
-    writes[detailKey(entry.id)] = detailRecordFor(record);
-    writes[mediaKey(entry.id)] = screenshotKeysOf(record.actions);
+    const detail = detailRecordFor(records[index]);
+    writes[detailKey(entry.id)] = detail;
+    writes[mediaKey(entry.id)] = screenshotKeysOf(detail.actions);
   }
   await chrome.storage.local.set(writes);
   return entries;

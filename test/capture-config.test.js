@@ -332,7 +332,8 @@ test("side-panel controls stay on one responsive toolbar row", () => {
   assert.match(controls, /\.header-record-actions \{[\s\S]*?grid-column: 1[\s\S]*?grid-row: 1[\s\S]*?width: 100%[\s\S]*?align-items: stretch/);
   assert.match(controls, /\.header-utilities \{[\s\S]*?grid-column: 3[\s\S]*?grid-row: 1/);
   assert.match(controls, /\.record-actions \{[\s\S]*?height: auto/);
-  assert.match(controls, /\.header-record-actions \.btn \{[\s\S]*?min-height: 36px[\s\S]*?white-space: nowrap/);
+  assert.match(controls, /\.header-record-actions \.btn \{[\s\S]*?min-height: var\(--control-h\)[\s\S]*?white-space: nowrap/);
+  assert.match(controls, /--control-h: 32px;/);
   assert.doesNotMatch(controls, /\.restart-state/);
   assert.match(controls, /@media \(max-width: 560px\)[\s\S]*?\.recorder-header \{[\s\S]*?grid-template-columns: minmax\(0, 360px\) minmax\(0, 1fr\) auto[\s\S]*?gap: 8px/);
   assert.match(popup, /id="record-btn"[\s\S]*?class="btn-icon"[\s\S]*?<svg/);
@@ -439,15 +440,16 @@ test("saved cases are reached through the split store, not the v1 array", () => 
   assert.match(caseStore, /export const MEDIA_PREFIX = "caseMedia:"/);
 });
 
-test("public notifications render as centered top banners", () => {
+test("public notifications render as centered top banners in the page theme", () => {
   const dialogs = read("ui", "lib", "dialogs.js");
+  const styles = read("ui", "styles", "unified-pages.css");
 
   assert.match(dialogs, /function notify\(/);
-  assert.match(dialogs, /position:fixed;top:16px/);
-  assert.match(dialogs, /align-items:center/);
-  assert.match(dialogs, /#f0fdf4/);
-  assert.doesNotMatch(dialogs, /bottom:12px/);
-  assert.doesNotMatch(dialogs, /background:\$\{danger \? "#7f1d1d" : "#0f172a"\}/);
+  // Inline colors would override the theme tokens and stay light in dark mode.
+  assert.doesNotMatch(dialogs, /style\.cssText|#f0fdf4|#fef2f2/);
+  assert.match(styles, /\.recorder-toast-stack \{[^}]*position: fixed; top: 16px;[^}]*align-items: center/);
+  assert.match(styles, /\.recorder-toast \{[^}]*background: var\(--success-light\)/);
+  assert.match(styles, /\.recorder-toast\.danger \{[^}]*background: var\(--danger-light\)/);
 });
 
 test("recording disclosure accurately includes all form input values", () => {

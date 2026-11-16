@@ -95,7 +95,7 @@ test("a v1 profile converts to the split layout and drops the old array", async 
     schemaVersion: 1,
     cases: [legacyCase("case_a", 2, ["screenshot:a1", "screenshot:a2"]), legacyCase("case_b", 1, ["screenshot:b1"])]
   });
-  const { caseStore, migration } = await loadModules();
+  const { caseStore, migration, schema } = await loadModules();
 
   const state = await migration.createCaseStoreCoordinator().ready();
   assert.equal(state.ok, true);
@@ -103,7 +103,7 @@ test("a v1 profile converts to the split layout and drops the old array", async 
   assert.equal(state.migrated, 2);
 
   assert.equal(storage.data.cases, undefined);
-  assert.equal(storage.data.schemaVersion, 2);
+  assert.equal(storage.data.schemaVersion, schema.SCHEMA_VERSION);
   assert.deepEqual(storage.data.caseIndex.map(entry => entry.id), ["case_b", "case_a"]);
   // Metadata only: the index must not carry steps or media keys.
   for (const entry of storage.data.caseIndex) {
@@ -120,21 +120,21 @@ test("a v1 profile converts to the split layout and drops the old array", async 
 
 test("a profile with no saved cases initializes an empty index", async () => {
   const storage = installFakeChrome({ schemaVersion: 1 });
-  const { migration } = await loadModules();
+  const { migration, schema } = await loadModules();
 
   const state = await migration.createCaseStoreCoordinator().ready();
   assert.equal(state.initialized, true);
   assert.deepEqual(storage.data.caseIndex, []);
-  assert.equal(storage.data.schemaVersion, 2);
+  assert.equal(storage.data.schemaVersion, schema.SCHEMA_VERSION);
 });
 
 test("data written before versioning existed is treated as v1", async () => {
   const storage = installFakeChrome({ cases: [legacyCase("case_a", 1, ["screenshot:a1"])] });
-  const { migration } = await loadModules();
+  const { migration, schema } = await loadModules();
 
   const state = await migration.createCaseStoreCoordinator().ready();
   assert.equal(state.migrated, 1);
-  assert.equal(storage.data.schemaVersion, 2);
+  assert.equal(storage.data.schemaVersion, schema.SCHEMA_VERSION);
 });
 
 test("a profile from a newer build is readable but not writable", async () => {
@@ -177,13 +177,13 @@ test("a conversion interrupted after the commit is not repeated", async () => {
     schemaVersion: 1,
     cases: [legacyCase("case_a", 1, ["screenshot:a1"])]
   });
-  const { migration } = await loadModules();
+  const { migration, schema } = await loadModules();
   await migration.createCaseStoreCoordinator().ready();
 
   // A second worker start sees a committed store and leaves it alone.
   storage.writes.length = 0;
   const second = await migration.createCaseStoreCoordinator().ready();
-  assert.deepEqual(second, { ok: true, writable: true, version: 2 });
+  assert.deepEqual(second, { ok: true, writable: true, version: schema.SCHEMA_VERSION });
   assert.deepEqual(storage.writes, []);
 });
 
@@ -366,4 +366,154 @@ test("the index orders newest first and breaks ties on id", async () => {
     { id: "a", createdAt: 100 }
   ]);
   assert.deepEqual(sorted.map(entry => entry.id), ["c", "b", "a"]);
+});
+
+test("a v2 profile only bumps the version and keeps every record", async () => {
+  const entry = { id: "case_a", name: "case a", createdAt: 1, stepCount: 1, readable: true };
+  const detail = { id: "case_a", actions: [{ id: "a1", type: "click" }], pages: [] };
+  const storage = installFakeChrome({
+    schemaVersion: 2,
+    caseIndex: [entry],
+    "case:case_a": detail,
+    "caseMedia:case_a": []
+  });
+  const { migration, schema } = await loadModules();
+
+  const state = await migration.createCaseStoreCoordinator().ready();
+  assert.equal(state.ok, true);
+  assert.equal(state.writable, true);
+  assert.equal(state.migrated, 0);
+  assert.equal(storage.data.schemaVersion, schema.SCHEMA_VERSION);
+  // Nothing but the version moves: this bump needs no data conversion.
+  assert.deepEqual(storage.data.caseIndex, [entry]);
+  assert.deepEqual(storage.data["case:case_a"], detail);
+  assert.equal(storage.data.cases, undefined);
+  assert.equal(storage.data.caseStoreMigration.status, "committed");
+});
+
+test("intent is normalised, clamped to the recorded steps and dropped when empty", async () => {
+  installFakeChrome({});
+  const { caseStore } = await loadModules();
+
+  assert.equal(caseStore.sanitizeIntent(null), null);
+  assert.equal(caseStore.sanitizeIntent({}), null);
+  // An inserted test step may carry nothing yet: it is a placeholder the steps
+  // recorded next belong to, so it must survive a save.
+  assert.deepEqual(caseStore.sanitizeIntent({ steps: [{ start: 2 }] }, 4).steps.map(step => step.start), [2]);
+
+  const intent = caseStore.sanitizeIntent({
+    steps: [
+      { id: "s2", title: "上传", start: 9, goal: "  整份用例在测上传  ", note: "先小图", checks: ["附件出现", "  "] },
+      { id: "s1", start: 3, checks: ["进入工作台"] },
+      { id: "dup", start: 3, checks: ["重复位置"] },
+      { id: "empty", start: 5 },
+      // Written by the first iteration of this field.
+      { id: "legacy", afterStep: 1, checks: ["旧格式"] }
+    ]
+  }, 6);
+
+  assert.equal(intent.note, undefined);
+  // Clamped to 1..stepCount+1: 9 means "starts before a step that does not
+  // exist yet" and becomes 7 (the open step). The duplicate start drops; the
+  // empty placeholder and the legacy afterStep entry are kept.
+  assert.deepEqual(intent.steps.map(step => step.start), [2, 3, 5, 7]);
+  // Ranges are explicit: a missing end runs to the step before the next test
+  // step, and the last one runs to the end of the recording.
+  assert.deepEqual(intent.steps.map(step => step.end), [2, 4, 6, 6]);
+  assert.deepEqual(intent.steps.map(step => step.open), [false, false, false, true]);
+  assert.deepEqual(intent.steps[1].checks, ["进入工作台"]);
+  assert.equal(intent.steps[3].id, "s2");
+  assert.equal(intent.steps[3].goal, "整份用例在测上传");
+  assert.deepEqual(intent.steps[0].checks, ["旧格式"]);
+
+  const detail = caseStore.detailRecordFor({
+    id: "case_a",
+    actions: Array.from({ length: 6 }, (_, index) => ({ id: `a${index + 1}` })),
+    pages: [],
+    intent
+  });
+  assert.deepEqual(detail.intent, intent);
+  assert.equal(caseStore.detailRecordFor({ id: "b", actions: [], pages: [] }).intent, undefined);
+});
+
+test("a workbench annotation edit preserves the index and recorded actions", async () => {
+  const entry = { id: "case_a", name: "case a", createdAt: 1, stepCount: 3, readable: true };
+  const detail = { id: "case_a", actions: [{ id: "a1" }, { id: "a2" }, { id: "a3" }], pages: [] };
+  const storage = installFakeChrome({
+    schemaVersion: 3,
+    caseIndex: [entry],
+    "case:case_a": detail
+  });
+  const { caseStore } = await loadModules();
+
+  const saved = await caseStore.updateIntent("case_a", {
+    steps: [{ id: "s1", title: "上传", start: 99, goal: "上传本地文件", checks: ["附件出现"] }]
+  });
+  assert.equal(saved.goal, undefined);
+  assert.equal(saved.steps[0].goal, "上传本地文件");
+  // Clamped to one past the last step: an open test step.
+  assert.equal(saved.steps[0].start, 4);
+  assert.deepEqual(storage.data["case:case_a"].intent, saved);
+  // The steps and the history list are untouched by an annotation edit.
+  assert.deepEqual(storage.data["case:case_a"].actions, detail.actions);
+  assert.deepEqual(storage.data.caseIndex, [entry]);
+
+  assert.equal(await caseStore.updateIntent("case_a", { goal: "", steps: [] }), null);
+  assert.equal(storage.data["case:case_a"].intent, undefined);
+  assert.equal(await caseStore.updateIntent("missing", { goal: "x" }), undefined);
+});
+
+test("annotations keep test criteria and ignore retired data fields", async () => {
+  installFakeChrome({});
+  const { caseStore } = await loadModules();
+
+  const intent = caseStore.sanitizeIntent({
+    steps: [{
+      id: "s1",
+      start: 1,
+      goal: "验证上传目标",
+      purpose: "验证上传",
+      preconditions: ["登录", "有权限"],
+      pass: ["完成后刷新仍在"],
+      dataValues: [
+        { id: "d1", field: " 标题 ", control: "input", rule: " 用日期后缀 " },
+        { id: "d2", field: "合同", control: "upload", rule: "ignored" },
+        { field: "", control: "checkbox", rule: "无字段应丢弃" },
+        { field: "状态", control: "unknown", rule: "按录制值" }
+      ],
+      filePool: {
+        zipName: "C:\\cases\\关联文档-files.zip",
+        poolKey: "intent-pool-s1",
+        files: [
+          { name: "../a.pdf", type: "pdf", size: 123 },
+          { name: "", type: "PDF", size: 1 }
+        ]
+      }
+    }]
+  }, 3);
+
+  assert.equal(intent.note, undefined);
+  assert.equal(intent.setup, undefined);
+  assert.equal(intent.pass, undefined);
+  assert.equal(intent.steps[0].goal, "验证上传目标");
+  assert.deepEqual(intent.steps[0].preconditions, ["登录", "有权限"]);
+  assert.deepEqual(intent.steps[0].pass, ["完成后刷新仍在"]);
+  assert.equal(intent.steps[0].purpose, "验证上传");
+  assert.equal(intent.steps[0].dataValues, undefined);
+  assert.equal(intent.steps[0].filePool, undefined);
+
+  // The old case-level pass criteria move to the first step, so reopening an
+  // annotated recording does not silently lose the tester's words.
+  const migrated = caseStore.sanitizeIntent({
+    note: "旧目标",
+    setup: "旧前置一\n旧前置二",
+    pass: "旧标准一\n旧标准二",
+    steps: [{ start: 1 }]
+  }, 2);
+  assert.equal(migrated.note, undefined);
+  assert.equal(migrated.setup, undefined);
+  assert.equal(migrated.pass, undefined);
+  assert.equal(migrated.steps[0].goal, "旧目标");
+  assert.deepEqual(migrated.steps[0].preconditions, ["旧前置一", "旧前置二"]);
+  assert.deepEqual(migrated.steps[0].pass, ["旧标准一", "旧标准二"]);
 });

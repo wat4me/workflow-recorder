@@ -45,6 +45,9 @@
   "folderDragHint": { "message": "Drop onto a folder to move inside it, or onto this heading to return to the root. Up to three levels are supported." },
   "moveFolderHint": { "message": "Choose a new parent for $NAME$. Its subfolders and cases move with it.", "placeholders": { "name": { "content": "$1" } } },
   "folderUpdated": { "message": "Folder updated" },
+  "folderCreated": { "message": "Folder created" },
+  "folderDeleted": { "message": "Folder deleted" },
+  "noRecordablePages": { "message": "No recordable pages are open. Open the http or https page you want to record first." },
   "updateFolderFailed": { "message": "Failed to update the folder" },
   "errorInvalidFolderUpdate": { "message": "Invalid folder update parameters" },
   "errorFolderMoveCycle": { "message": "A folder cannot be moved into itself or its descendants" },
@@ -122,6 +125,7 @@
   "selectedStepCount": { "message": "$COUNT$ step(s) selected", "placeholders": { "count": { "content": "$1" } } },
   "selectStep": { "message": "Select step $STEP$", "placeholders": { "step": { "content": "$1" } } },
   "selectPageSteps": { "message": "Select all steps on $PAGE$", "placeholders": { "page": { "content": "$1" } } },
+  "recordingTabNumber": { "message": "Tab $NUMBER$", "placeholders": { "number": { "content": "$1" } } },
   "collapsePageSteps": { "message": "Collapse $1 ($2 steps)" },
   "expandPageSteps": { "message": "Expand $1 ($2 steps)" },
   "deleteSelectedSteps": { "message": "Delete selected" },
@@ -178,9 +182,6 @@
   "expandStepScreenshots": { "message": "Show screenshots ($1)" },
   "collapseStepScreenshots": { "message": "Hide screenshots ($1)" },
   "captureSettingsTitle": { "message": "Recording settings" },
-  "themeLabel": { "message": "Appearance" },
-  "themeLight": { "message": "Light" },
-  "themeDark": { "message": "Dark" },
   "switchToLightTheme": { "message": "Switch to light mode" },
   "switchToDarkTheme": { "message": "Switch to dark mode" },
   "captureSettingsMessage": { "message": "Step screenshots are the most expensive part of a recording. What you choose here affects screenshots only, never the recorded steps." },
@@ -368,6 +369,7 @@
   "copyForAI": { "message": "Copy task for AI" },
   "copyTaskCopied": { "message": "Task instructions copied" },
     "continueRecordingReady": { "message": "The case is loaded. Continue recording in the target page's side panel." },
+    "continueRecordingOpenPanel": { "message": "The case is loaded. Click the extension icon on the target page to open the side panel and continue recording." },
     "currentWindow": { "message": "Current window" },
     "otherWindow": { "message": "Window $WINDOW$", "placeholders": { "window": { "content": "$1" } } },
     "remove": { "message": "Remove" },
@@ -376,4 +378,122 @@
     "selectTargetPage": { "message": "Select a page to continue recording" },
     "selectTargetPageHint": { "message": "Choose the page where you want to open the side panel and continue recording." },
     "targetPageUnavailable": { "message": "The target page was closed or cannot be recorded. Choose another page." },
-    "untitledPage": { "message": "Untitled page" }}
+    "untitledPage": { "message": "Untitled page" },
+    "intentGoal": { "message": "Test goal" },
+    "intentChecks": { "message": "Verification points" },
+    "intentReplaceable": { "message": "Replaceable" },
+    "intentCoverage": { "message": "Coverage" },
+    "intentOutOfScope": { "message": "Not verified this time" },
+    "intentPreconditions": { "message": "Preconditions" },
+    "intentOpenQuestions": { "message": "To confirm" },
+    "intentStepHeading": { "message": "Test step $STEP$", "placeholders": { "step": { "content": "$1" } } },
+    "intentStepNote": { "message": "Cautions" },
+    "intentStepSkipped": { "message": "not part of the test" },
+    "intentAnnotationTitle": { "message": "Annotate intent" },
+    "intentAnnotationHint": { "message": "Annotations are written by the tester to say what each test step verifies." },
+    "intentStepSplit": { "message": "Test step boundaries" },
+    "intentInsertStep": { "message": "Insert test step here" },
+    "intentNoSteps": { "message": "No test steps defined yet" },
+    "intentStepTitleLabel": { "message": "Stage name" },
+    "intentStepTitlePlaceholder": { "message": "e.g. Choose a linked document" },
+    "intentStepNoteLabel": { "message": "Cautions" },
+    "intentStepNotePlaceholder": { "message": "e.g. attachments over 15 MB are rejected" },
+    "intentStepChecksLabel": { "message": "Verification points" },
+    "intentStepChecksPlaceholder": { "message": "e.g. the linked document appears in the list after saving (one per line)" },
+    "intentStepIgnoreLabel": { "message": "Not part of the test" },
+    "intentGoalPlaceholder": { "message": "e.g. verify uploading and showing a linked document" },
+    "intentChecksPlaceholder": { "message": "e.g. the linked document appears in the list after saving (one per line)" },
+    "intentReplaceablePlaceholder": { "message": "What can be swapped for something else" },
+    "intentCoveragePlaceholder": { "message": "Which variants this case must try" },
+    "intentOutOfScopePlaceholder": { "message": "Which results are not examined this time" },
+    "intentPreconditionsPlaceholder": { "message": "e.g. a regular member is signed in; the project has a document" },
+    "intentStepPreconditionsPlaceholder": { "message": "e.g. signed in with the target page open (one per line)" },
+    "intentOpenQuestionsPlaceholder": { "message": "Anything still unclear" },
+    "intentMissingGoal": { "message": "No test goal yet" },
+    "intentDuplicateBoundary": { "message": "Two test steps share one position, merge them" },
+    "intentPassCriteria": { "message": "Pass criteria" },
+    "intentPassCriteriaPlaceholder": { "message": "e.g. the link is still there after refreshing" },
+    "intentStepPassPlaceholder": { "message": "e.g. the uploaded file can be read (one per line)" },
+    "intentPurpose": { "message": "Purpose" },
+    "intentStepPurposeLabel": { "message": "Purpose of this step" },
+    "intentStepPurposePlaceholder": { "message": "e.g. Verify selecting, saving and showing the link" },
+    "intentCheckOnSkippedStep": { "message": "A step marked \"not part of the test\" has a goal, preconditions, verification points or pass criteria" },
+    "intentSave": { "message": "Save annotation" },
+    "intentSaved": { "message": "Annotation saved" },
+    "intentSaveFailed": { "message": "Could not save annotation" },
+    "intentActionsChanged": { "message": "The recorded steps changed. Reopen the annotation and try again." },
+    "intentChanged": { "message": "The annotation was updated. Reopen it and try again." },
+    "intentUnannotatedSteps": { "message": "Unannotated recorded steps" },
+    "intentManage": { "message": "View annotations" },
+    "intentPendingRange": { "message": "Waiting for recording" },
+    "intentRangeInvalidShort": { "message": "Invalid step range" },
+    "intentSplitHelp": { "message": "The selected range gets a new annotation. Later actions in the original range can be annotated separately." },
+    "intentSaving": { "message": "Saving…" },
+    "intentPreviewEmpty": { "message": "Choose a range of recorded actions and describe what to verify." },
+    "intentExtraDetails": { "message": "Additional details" },
+    "intentExtraCount": { "message": "Filled: $COUNT$", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "errorCaseReadFailed": { "message": "Could not read the case" }
+  ,
+    "intentSaveAnyway": { "message": "Save anyway" }
+  ,
+    "intentStepRange": { "message": "Steps $FROM$–$TO$", "placeholders": { "from": { "content": "$1" }, "to": { "content": "$2" } } }
+  ,
+    "intentStepRangeEmpty": { "message": "Empty" }
+  ,
+    "intentStepRangeHint": { "message": "Recorded range" }
+  ,
+    "intentInsertStepAfter": { "message": "Insert a test step after this one" }
+  ,
+    "intentStepStart": { "message": "Start step" }
+  ,
+    "edit": { "message": "Edit" }
+  ,
+    "intentSummarySteps": { "message": "$COUNT$ test steps", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "intentSummaryChecks": { "message": "$COUNT$ verification points", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "intentSummaryPending": { "message": "$COUNT$ waiting for steps", "placeholders": { "count": { "content": "$1" } } }
+  ,
+    "intentOptional": { "message": " (optional)" }
+  ,
+    "intentFocusedTitle": { "message": "Edit test step $STEP$", "placeholders": { "step": { "content": "$1" } } }
+  ,
+    "intentFocusedHint": { "message": "Only this test step is edited here." }
+  ,
+    "intentNote": { "message": "Case note" }
+  ,
+    "intentNotePlaceholder": { "message": "What this case is about, one line" }
+  ,
+    "intentStepEnd": { "message": "End step" }
+  ,
+    "intentSummaryNoNote": { "message": "No test goal yet" }
+  ,
+    "intentStepEndHeading": { "message": "Test step $STEP$ ends", "placeholders": { "step": { "content": "$1" } } }
+  ,
+    "intentRangeInvalid": { "message": "The end step cannot come before the start step" }
+  ,
+    "intentNewStep": { "message": "New test step" }
+  ,
+  "intentPickHint": {"message": "Click a start step and an end step on the left, or drag across steps. Shift+click extends the range."},
+  "intentOverlapDiscardTitle": {"message": "Replace existing annotations"},
+  "intentOverlapDiscardMessage": {"message": "The selected range includes $STEPS$. Saving will discard the existing annotation of these test steps.", "placeholders": {"steps": {"content": "$1"}}},
+  "intentOverlapItem": {"message": "\"$NAME$\" (steps $FROM$–$TO$)", "placeholders": {"name": {"content": "$1"}, "from": {"content": "$2"}, "to": {"content": "$3"}}},
+  "intentOverlapDiscardContinue": {"message": "Keep selecting"},
+  "intentOverlapDiscardSave": {"message": "Discard and save"},
+  "listSeparator": {"message": ", "},
+  "intentAnnotateRange": {"message": "Annotate steps $FROM$–$TO$", "placeholders": {"from": {"content": "$1"}, "to": {"content": "$2"}}},
+  "intentAnnotateStep": {"message": "Annotate step $STEP$", "placeholders": {"step": {"content": "$1"}}},
+  "intentAnnotateGapHint": {"message": "Includes the unchecked steps in between"},
+    "intentOverlap": { "message": "Two test steps cover the same recorded step; adjust their ranges" }
+  ,
+    "intentAddStepHint": { "message": "New intent for steps $FROM$–$TO$; change where it ends to split it here.", "placeholders": { "from": { "content": "$1" }, "to": { "content": "$2" } } }
+  ,
+    "intentAllStepsAnnotated": { "message": "Every recorded step is already annotated." }
+  ,
+    "intentSplitStepHint": { "message": "Every step is annotated; cut steps $FROM$–$TO$ out for this new test step and annotate the rest next time.", "placeholders": { "from": { "content": "$1" }, "to": { "content": "$2" } } }
+  ,
+    "intentSplitStep": { "message": "Cut out a new test step" }
+  ,
+    "intentEmptySplit": { "message": "The new test step is empty; saving would clear existing text, so fill it in first" }
+  }

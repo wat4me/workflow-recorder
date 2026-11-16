@@ -70,6 +70,13 @@ async function resolveState() {
     return { ok: true, writable: true, version: SCHEMA_VERSION };
   }
 
+  // 2 -> 3 only added the optional `intent` to detail records: the layout is
+  // unchanged, so the version number IS the migration. Committing it here keeps
+  // the index and every detail record exactly as they are.
+  if (Number(stored) === 2 && Array.isArray(data[caseStore.INDEX_KEY])) {
+    return commitVersionBump(2);
+  }
+
   // `undefined` predates versioning entirely, and that data has the v1 shape.
   if (stored !== undefined && Number(stored) !== SCHEMA_VERSION && !MIGRATABLE_FROM.has(Number(stored))) {
     return { ok: false, writable: false, reason: "unsupported", version: stored, expected: SCHEMA_VERSION };
@@ -84,6 +91,45 @@ async function resolveState() {
   }
   if (convertible.length === 0) return initialize();
   return migrate(convertible, data[PROGRESS_KEY], stored);
+}
+
+/** Fresh profile, or a v1 profile that never saved a case. */
+/**
+ * Commits a version that needs no data conversion.
+ *
+ * The progress record is written for the same reason `migrate` writes one: the
+ * panel and support logs read it to tell "never migrated" from "migrated
+ * already", and a bump that left no trace would look like a fresh profile.
+ */
+async function commitVersionBump(from) {
+  try {
+    await chrome.storage.local.set({
+      [VERSION_KEY]: SCHEMA_VERSION,
+      [PROGRESS_KEY]: {
+        from,
+        to: SCHEMA_VERSION,
+        status: "committed",
+        nextIndex: 0,
+        total: 0,
+        committedAt: Date.now()
+      }
+    });
+    const committed = await chrome.storage.local.get(VERSION_KEY);
+    if (Number(committed[VERSION_KEY]) !== SCHEMA_VERSION) {
+      throw new Error("schema version could not be read back");
+    }
+    return { ok: true, writable: true, version: SCHEMA_VERSION, migrated: 0 };
+  } catch (error) {
+    console.error(`[Case Store] Could not bump schema ${from} -> ${SCHEMA_VERSION}:`, error?.message);
+    return {
+      ok: false,
+      writable: false,
+      reason: "migration-failed",
+      error: error?.message || String(error),
+      version: from,
+      expected: SCHEMA_VERSION
+    };
+  }
 }
 
 /** Fresh profile, or a v1 profile that never saved a case. */
@@ -112,8 +158,9 @@ async function migrate(records, progress, storedVersion) {
       const batch = records.slice(start, start + BATCH_SIZE);
       const writes = {};
       for (const record of batch) {
-        writes[caseStore.detailKey(record.id)] = caseStore.detailRecordFor(record);
-        writes[caseStore.mediaKey(record.id)] = caseStore.screenshotKeysOf(record.actions);
+        const detail = caseStore.detailRecordFor(record);
+        writes[caseStore.detailKey(record.id)] = detail;
+        writes[caseStore.mediaKey(record.id)] = caseStore.screenshotKeysOf(detail.actions);
       }
       await chrome.storage.local.set(writes);
       await setProgress({ from, status: "running", nextIndex: start + batch.length, total: records.length });

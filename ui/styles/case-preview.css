@@ -1,4 +1,4 @@
-/* ── Read-only case preview ── */
+/* ── Saved case preview ── */
 .preview-panel {
   flex: 1;
   min-width: 0;
@@ -36,9 +36,99 @@
   white-space: nowrap;
 }
 
-.btn-compact {
-  padding: 4px 10px;
-  font-size: 11px;
+
+.preview-workspace:has(> .preview-intent-pane:not([hidden])) {
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 40%, 540px);
+}
+
+.preview-intent-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-inline-start: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.preview-intent-pane[hidden],
+.preview-intent-overview[hidden] {
+  display: none;
+}
+
+.preview-intent-overview {
+  overflow: auto;
+  padding: 14px 16px;
+}
+
+.preview-intent-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.preview-intent-header h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.preview-intent-header .btn {
+  width: auto;
+}
+
+
+.preview-intent-empty {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.preview-intent-editor,
+.intent-inline-dialog {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+}
+
+.intent-inline-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.preview-panel .step-card:has(> .step-intent-marker) {
+  flex-wrap: wrap;
+}
+
+.preview-panel .step-intent-marker {
+  flex: 0 0 100%;
+}
+
+/* Range picking: every card is a target while the annotation editor is open. */
+.preview-range-hint {
+  margin: 12px 16px 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-light);
+  color: var(--accent-color);
+  font-size: 12px;
+  line-height: 1.5;
+}
+#preview-steps-container.is-picking-range .step-card {
+  cursor: pointer;
+  user-select: none;
+}
+/* Checking steps starts an annotation; once the editor is open, clicking the
+   cards adjusts its range instead. */
+#preview-steps-container.is-picking-range .step-select-checkbox {
+  visibility: hidden;
+}
+#preview-steps-container.is-picking-range .step-card:hover:not(.is-intent-highlighted) {
+  background: var(--bg-list-hover);
+  box-shadow: inset 3px 0 var(--accent-subtle);
+}
+.preview-panel .step-card.is-intent-highlighted {
+  background: var(--accent-light);
+  box-shadow: inset 3px 0 var(--accent-color);
 }
 
 @media (max-width: 760px) {
@@ -51,5 +141,15 @@
   .preview-panel > .panel-head .panel-head-actions {
     grid-column: 1 / -1;
     justify-content: flex-end;
+  }
+
+  .preview-workspace:has(> .preview-intent-pane:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 2fr) minmax(0, 3fr);
+  }
+
+  .preview-intent-pane {
+    border-inline-start: 0;
+    border-top: 1px solid var(--border-color);
   }
 }

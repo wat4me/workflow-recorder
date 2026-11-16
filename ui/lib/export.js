@@ -85,7 +85,7 @@
     const baseName = sanitizeExportName(workflow.name);
     const folder = `${baseName}/`;
     const doc = globalThis.StepDocGenerator
-      ? globalThis.StepDocGenerator.generate(actions)
+      ? globalThis.StepDocGenerator.generate(actions, workflow.intent || null)
       : "No steps recorded yet.";
     const screenshotLines = includeScreenshots ? await addStepScreenshots(writer, folder, actions) : [];
 
@@ -96,14 +96,14 @@
     await writer.add(`${folder}${baseName}.md`, globalThis.fflate.strToU8(document), true);
   }
 
-  async function exportWorkflow(actions, exportName, includeScreenshots) {
+  async function exportWorkflow(actions, exportName, includeScreenshots, intent = null) {
     if (!actions || actions.length === 0) return;
 
     includeScreenshots ??= await readIncludeScreenshots();
     const baseName = sanitizeExportName(exportName);
     const writer = globalThis.RecorderArchiveStream.createWriter();
     try {
-      await addWorkflowFolder(writer, { name: baseName, actions }, includeScreenshots);
+      await addWorkflowFolder(writer, { name: baseName, actions, intent }, includeScreenshots);
       triggerDownload(writer.finish(), `${baseName}.zip`);
     } catch (error) { writer.abort(); throw error; }
   }

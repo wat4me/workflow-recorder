@@ -14,7 +14,8 @@ import * as caseStore from "./case-store.js";
 import { nameKey, reserveCaseName } from "../../shared/case-names.js";
 import { isReadableCase } from "./schema.js";
 import * as actionStore from "./actions.js";
-import { ORIGIN_KEY, lineageFor, originFor, readOrigin, tombstone } from "./workspace-origin.js";
+import * as intentStore from "./intent.js";
+import { ORIGIN_KEY, lineageFor, originFor, readOrigin, savedCaseIdFor, tombstone } from "./workspace-origin.js";
 
 export function createCaseManager({
   t,
@@ -111,6 +112,9 @@ export function createCaseManager({
     }
 
     const origin = await readOrigin();
+    // The annotations belong to the steps being saved, so they are read at save
+    // time rather than kept in a panel-local copy that a reload would lose.
+    const intent = await intentStore.readIntent(actions.length);
     const usedNames = new Set((await caseStore.readIndex())
       .filter(entry => (entry.folderId || null) === folderId).map(entry => nameKey(entry.name)));
     const caseRecord = {
@@ -118,6 +122,7 @@ export function createCaseManager({
       name: reserveCaseName(name || defaultCaseName(), usedNames),
       folderId,
       createdAt: Date.now(),
+      ...(intent ? { intent } : {}),
       actions: structuredClone(actions),
       pages: collectPages(actions),
       // Null for a workspace that was not loaded from a case, which is what makes
@@ -254,9 +259,10 @@ export function createCaseManager({
     if (error) return { success: false, error };
 
     const actions = detail.actions;
-    await actionStore.replaceActions(structuredClone(actions));
-    await chrome.storage.local.set({
+    await actionStore.replaceActions(structuredClone(actions), {
+      [intentStore.INTENT_KEY]: caseStore.sanitizeIntent(detail.intent, actions.length),
       tabsMapping: {},
+      resumableScope: null,
       nextPageNumber: nextPageNumberFor(collectPages(actions)),
       activeCaseId: caseId,
       [ORIGIN_KEY]: originFor(entry, actions)
@@ -284,6 +290,7 @@ export function createCaseManager({
         actions: detail.actions,
         pages: detail.pages,
         kind: entry.kind || null,
+        intent: caseStore.sanitizeIntent(detail.intent, detail.actions.length),
         ...(detail.composition ? { composition: detail.composition } : {}),
         ...(detail.flowEdges ? { flowEdges: detail.flowEdges } : {})
       }
@@ -331,6 +338,7 @@ export function createCaseManager({
         createdAt: Number(record.createdAt) || Date.now(),
         actions: structuredClone(record.actions),
         pages: structuredClone(record.pages),
+        intent: record.intent,
         lineage: parentId && incomingIds.has(parentId) ? structuredClone(record.lineage) : null
       };
     });
@@ -466,6 +474,63 @@ export function createCaseManager({
       };
     }
     return { success: true, removedCount: result.removedCount };
+  }
+
+  /**
+   * Rewrites the annotation of a saved case from the workbench.
+   *
+   * Keep the workspace annotation in sync when it still represents this case.
+   */
+  async function updateCaseIntent(caseId, intent, expectedIntent) {
+    const blocked = await blockedReason();
+    if (blocked) return { success: false, error: blocked };
+    const [entry, { activeCaseId }] = await Promise.all([
+      caseStore.readEntry(caseId),
+      chrome.storage.local.get("activeCaseId")
+    ]);
+    if (!entry) return { success: false, error: t("errorCaseNotFound", [], "用例不存在") };
+    if (expectedIntent !== undefined) {
+      const detail = await caseStore.readDetail(caseId);
+      const current = caseStore.sanitizeIntent(detail?.intent, detail?.actions?.length);
+      if (JSON.stringify(current) !== JSON.stringify(expectedIntent)) {
+        return { success: false, error: t("intentChanged", [], "标注已更新，请重新打开后再试") };
+      }
+    }
+    const saved = await caseStore.updateIntent(caseId, intent, {
+      workspaceKey: activeCaseId === caseId ? intentStore.INTENT_KEY : null
+    });
+    if (saved === undefined) return { success: false, error: t("errorCaseNotFound", [], "用例不存在") };
+    return { success: true, intent: saved };
+  }
+
+  async function saveWorkspaceIntent(intent, { expectedActionIds, expectedIntent } = {}) {
+    const [actions, state] = await Promise.all([
+      actionStore.readActions(),
+      chrome.storage.local.get(["activeCaseId", ORIGIN_KEY, intentStore.INTENT_KEY])
+    ]);
+    if (!actions.length || (Array.isArray(expectedActionIds) &&
+        expectedActionIds.some((id, index) => id !== actions[index]?.id))) {
+      return { success: false, error: t("intentActionsChanged", [], "录制步骤已变化，请重新打开标注后再试") };
+    }
+    if (expectedIntent !== undefined &&
+        JSON.stringify(caseStore.sanitizeIntent(expectedIntent, actions.length)) !==
+        JSON.stringify(caseStore.sanitizeIntent(state[intentStore.INTENT_KEY], actions.length))) {
+      return { success: false, error: t("intentChanged", [], "标注已更新，请重新打开后再试") };
+    }
+    // A loaded or saved workspace has a case backing these exact actions.
+    // Publish both copies together so a reload or download sees the edit.
+    const caseId = savedCaseIdFor(state, actions);
+    if (caseId) {
+      const blocked = await blockedReason();
+      if (blocked) return { success: false, error: blocked };
+      const saved = await caseStore.updateIntent(caseId, intent, { workspaceKey: intentStore.INTENT_KEY });
+      if (saved !== undefined) return { success: true, intent: saved };
+      if (state.activeCaseId) {
+        return { success: false, error: t("errorCaseNotFound", [], "用例不存在") };
+      }
+    }
+    const clean = await intentStore.writeIntent(intent, actions.length);
+    return { success: true, intent: clean };
   }
 
   async function renameCase(caseId, name) {
@@ -672,6 +737,8 @@ export function createCaseManager({
     removeMany: caseIds => queueCaseWrite(() => removeCases(caseIds)),
     removeFolder: folderId => queueCaseWrite(() => removeFolder(folderId)),
     save: (name, snapshot, folderId) => queueCaseWrite(() => saveCase(name, snapshot, folderId)),
-    updateFolder: (id, changes) => queueCaseWrite(() => updateFolder(id, changes))
+    saveWorkspaceIntent: (intent, expected) => queueCaseWrite(() => saveWorkspaceIntent(intent, expected)),
+    updateFolder: (id, changes) => queueCaseWrite(() => updateFolder(id, changes)),
+    updateIntent: (caseId, intent, expectedIntent) => queueCaseWrite(() => updateCaseIntent(caseId, intent, expectedIntent))
   };
 }

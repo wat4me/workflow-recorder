@@ -204,30 +204,28 @@ import { iconSvg } from "./icons.js";
     closeButton.title = t("closeEsc", [], "关闭（Esc）");
     closeButton.innerHTML = iconSvg("close", 18);
 
+    let closeModal = null;
     const close = () => {
+      if (closed) return;
       closed = true;
       ++loadId;
-      document.removeEventListener("keydown", onKeyDown);
-      overlay.remove();
+      closeModal();
       URL.revokeObjectURL(currentUrl);
       window.removeEventListener("resize", fitImage);
     };
+    // Escape, Tab and the backdrop follow the shared modal contract; the arrow
+    // keys page through the screenshot sequence.
     const onKeyDown = event => {
-      if (!["Escape", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
       event.preventDefault();
-      event.stopImmediatePropagation();
-      if (event.key === "Escape") close();
-      else if (sequenceIndex >= 0) showItem(sequenceIndex + (event.key === "ArrowLeft" ? -1 : 1));
+      event.stopPropagation();
+      if (sequenceIndex >= 0) showItem(sequenceIndex + (event.key === "ArrowLeft" ? -1 : 1));
     };
 
-    overlay.addEventListener("click", event => {
-      if (event.target === overlay) close();
-    });
     closeButton.addEventListener("click", close);
-    document.addEventListener("keydown", onKeyDown);
     stage.append(image, highlight.element, message);
     overlay.append(toolbar, stage, closeButton);
-    document.body.appendChild(overlay);
+    closeModal = globalThis.RecorderDialogs.openModal(overlay, { onDismiss: close, onKeyDown });
     image.src = currentUrl;
     updateSequenceButtons();
     window.addEventListener("resize", fitImage);

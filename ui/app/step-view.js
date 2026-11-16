@@ -1,7 +1,16 @@
 /** Shared step cards for the side panel and saved-case previews. */
 import { attachStepMedia } from "./step-media.js";
 import { iconSvg } from "../lib/icons.js";
+import { recordingTabLabel } from "../lib/recording-tab-label.js";
 import { createVirtualWindow } from "../lib/virtual-window.js";
+
+function hashText(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) {
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  }
+  return hash >>> 0;
+}
 
 if (!window.RecorderStepView) {
   let viewSequence = 0;
@@ -9,8 +18,15 @@ if (!window.RecorderStepView) {
     const {
       stepsContainer, emptyState, stepCountBadge, selectAllSteps,
       deleteSelectedStepsBtn, downloadDocBtn, saveCurrentCaseBtn, onChanged,
-      readOnly = false
+      stepMarker = null, onStepMarkerEdit = null,
+      readOnly = false,
+      // The read-only preview can still select steps to annotate them.
+      selectable = !readOnly
     } = options;
+    let selectionListener = null;
+    // Shift+click selects every step between the last toggled one and this one.
+    let selectionAnchor = null;
+    let shiftToggle = false;
     const { t } = globalThis.RecorderI18n;
     const { MESSAGE } = globalThis.WorkflowRecorderProtocol;
     const { getBlob, sendRuntimeMessage } = globalThis.RecorderBridge;
@@ -23,11 +39,23 @@ if (!window.RecorderStepView) {
     const selectedActionIds = new Set();
     const pageSelections = new Map();
     const collapsedSegments = new Set();
+    const intentSections = new Map();
+    const intentExpansion = new Map();
+    let intentSteps = [];
+    let intentByIndex = [];
+    let lastIntentGroup = null;
     let workspaceContext = {};
     const expansionOverrides = new Map();
     const viewId = ++viewSequence;
     let nextMediaId = 0;
     let screenshotsExpandedDefault = true;
+    // Which card opens a test step, decided by the panel from the annotation.
+    // Returns null for steps that start nothing, so a plain recording renders
+    // exactly as it did before annotations existed.
+    let markerProvider = stepMarker;
+    let endMarkerProvider = null;
+    let markerEditHandler = onStepMarkerEdit;
+    let highlightedRange = null;
     const CAPTURE_LABELS = {
       pending: () => t("captureStateWaiting", [], "等待截图"),
       "capturing-auto": () => t("captureStateAuto", [], "系统截图中"),
@@ -57,6 +85,7 @@ if (!window.RecorderStepView) {
     let recording = false;
     let firstRender = true;
     let currentActions = [];
+    let pageHueSeed = 0;
     let pageSegments = [];
     let visibleIndices = [];
     let currentCapture = {};
@@ -91,12 +120,97 @@ if (!window.RecorderStepView) {
       if (changed && visibleIndices.length > 200) scheduleWindow();
     });
     stepsContainer.addEventListener("scroll", () => { if (visibleIndices.length > 200) scheduleWindow(); }, { passive: true });
+    window.addEventListener("recorderLanguageChanged", scheduleWindow);
     function scrollToLatest() {
       requestAnimationFrame(() => { stepsContainer.scrollTop = stepsContainer.scrollHeight; });
     }
     function setRecording(value) {
       recording = !!value;
       stepsContainer.classList.toggle("is-recording", recording);
+    }
+    function syncIntentMarker(entry, index) {
+      const group = intentByIndex[index];
+      const spec = group?.start === index ? group : markerProvider?.(index);
+      const current = entry.card.querySelector(":scope > .step-intent-marker");
+      if (!spec) { current?.remove(); return; }
+      const signature = JSON.stringify([spec.label, spec.detail, group?.title, group?.key, group?.end, isIntentCollapsed(group), index]);
+      if (current?.dataset.signature === signature) return;
+      const previousFocus = current?.contains(document.activeElement) ? document.activeElement.className : null;
+      const node = current || document.createElement("div");
+      node.dataset.signature = signature;
+      if (!current) {
+        node.className = "step-intent-marker";
+        entry.card.prepend(node);
+      }
+      const parts = [];
+      const label = document.createElement("span");
+      label.className = "step-intent-marker-label";
+      label.textContent = group ? group.title || group.heading : spec.label;
+      label.title = label.textContent;
+      parts.push(label);
+      if (group) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "step-intent-group-toggle";
+        toggle.setAttribute("aria-expanded", String(!isIntentCollapsed(group)));
+        const content = document.createElement("span");
+        content.className = "step-intent-group-content";
+        const meta = document.createElement("span");
+        meta.className = "step-intent-group-meta";
+        const range = t("intentStepRange", [String(group.start + 1), String(group.end + 1)],
+          `第 ${group.start + 1}–${group.end + 1} 步`);
+        meta.textContent = group.title ? `${group.heading} · ${range}` : range;
+        content.append(label, meta);
+        toggle.innerHTML = iconSvg("chevronRight", 14);
+        toggle.append(content);
+        toggle.addEventListener("click", () => {
+          const top = entry.card.getBoundingClientRect().top;
+          intentExpansion.set(group.key, isIntentCollapsed(group));
+          renderAroundHeading(entry, top);
+        });
+        parts[0] = toggle;
+      } else if (spec.detail) {
+        const detail = document.createElement("span");
+        detail.className = "step-intent-marker-detail";
+        detail.textContent = spec.detail;
+        detail.title = spec.detail;
+        parts.push(detail);
+      }
+      if (markerEditHandler) {
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "icon-btn step-intent-marker-edit";
+        edit.title = t("edit", [], "编辑");
+        edit.setAttribute("aria-label", `${edit.title} ${spec.label}`);
+        edit.setAttribute("aria-haspopup", "dialog");
+        edit.innerHTML = iconSvg("pencil", 14);
+        edit.addEventListener("click", event => {
+          event.stopPropagation();
+          markerEditHandler(group ? group.id : index);
+        });
+        parts.push(edit);
+      }
+      node.replaceChildren(...parts);
+      if (previousFocus) [...node.querySelectorAll("button")].find(button => button.className === previousFocus)
+        ?.focus({ preventScroll: true });
+    }
+    /**
+     * Draws the closing rule of a test step, below its last recorded step.
+     *
+     * It only exists while the following steps have no annotation yet: once the
+     * next test step starts there, its own marker is the divider, so two rules
+     * would sit on top of each other.
+     */
+    function syncIntentEndMarker(entry, index) {
+      const spec = endMarkerProvider ? endMarkerProvider(index) : null;
+      const current = entry.card.querySelector(":scope > .step-intent-end");
+      if (!spec) { current?.remove(); return; }
+      const node = current || document.createElement("div");
+      if (!current) {
+        node.className = "step-intent-end";
+        entry.card.append(node);
+      }
+      node.textContent = spec.label;
     }
     function describeStep(action) {
       return window.StepDocGenerator
@@ -180,15 +294,15 @@ if (!window.RecorderStepView) {
       if (!entry.checkbox) return;
       entry.checkbox.checked = selectedActionIds.has(entry.actionId);
       entry.card.classList.toggle("is-selected", entry.checkbox.checked);
-      if (entry.pageHeading.hidden) return;
-      const { ids, selectedCount } = pageSelections.get(entry.pageName.textContent);
+      if (!entry.pageHeading || entry.pageHeading.hidden) return;
+      const { ids, selectedCount } = pageSelections.get(pageSegments[entry.index].page);
       entry.pageCheckbox.hidden = pageSelections.size < 2;
       entry.pageCheckbox.disabled = ids.length === 0;
       entry.pageCheckbox.checked = ids.length > 0 && selectedCount === ids.length;
       entry.pageCheckbox.indeterminate = selectedCount > 0 && selectedCount < ids.length;
     }
     function updateSelection() {
-      if (readOnly) return;
+      if (!selectable) return;
       pageSelections.clear();
       let total = 0;
       let selectedCount = 0;
@@ -221,9 +335,27 @@ if (!window.RecorderStepView) {
       head?.classList.toggle("is-selecting", selectedCount > 0);
       head?.classList.toggle("is-empty", total === 0);
     }
+    /** Indices of the selected steps in the current list, ascending. */
+    function selectedIndices() {
+      return currentActions.flatMap((action, index) => (action.id && selectedActionIds.has(action.id) ? [index] : []));
+    }
+    /**
+     * Rendering can move the selected indices. Listeners may re-render (to
+     * highlight a range), so they hear about it once the render has finished.
+     */
+    let selectionNotifyQueued = false;
+    function notifySelectionSoon() {
+      if (!selectionListener || selectionNotifyQueued) return;
+      selectionNotifyQueued = true;
+      queueMicrotask(() => {
+        selectionNotifyQueued = false;
+        selectionListener?.(selectedIndices());
+      });
+    }
     function refreshSelection() {
       updateSelection();
       for (const entry of cardEntries.values()) syncSelection(entry);
+      selectionListener?.(selectedIndices());
     }
     async function deleteSelectedSteps() {
       const context = { ...workspaceContext };
@@ -244,13 +376,41 @@ if (!window.RecorderStepView) {
     }
     function actionKey(action, index) { return action.id ? `id:${action.id}` : `index:${index}`; }
     function stepPage(action) { return action.pageName || "page1"; }
+    function updateIntentGroups() {
+      intentByIndex = [];
+      lastIntentGroup = null;
+      const live = new Set();
+      for (const [position, step] of intentSteps.entries()) {
+        const start = step.start - 1;
+        const end = Math.min(step.open ? currentActions.length : step.end,
+          (intentSteps[position + 1]?.start ?? Infinity) - 1, currentActions.length) - 1;
+        if (start < 0 || start > end) continue;
+        const group = {
+          id: step.id,
+          key: JSON.stringify([step.id, currentActions[start].id ?? start]),
+          start,
+          end,
+          title: step.title,
+          heading: globalThis.RecorderIntentDialog.stepLabel(null, position),
+          label: globalThis.RecorderIntentDialog.stepLabel(step, position)
+        };
+        for (let index = start; index <= end; index++) intentByIndex[index] = group;
+        lastIntentGroup = group.key;
+        live.add(group.key);
+      }
+      for (const id of intentExpansion.keys()) if (!live.has(id)) intentExpansion.delete(id);
+      stepsContainer.classList.toggle("has-intent-groups", live.size > 0);
+    }
+    function isIntentCollapsed(group) {
+      return Boolean(group && !(intentExpansion.get(group.key) ?? (group.key === lastIntentGroup)));
+    }
     function updatePageSegments() {
       if (readOnly) return;
       const live = new Set();
       let segment;
       pageSegments = currentActions.map((action, index) => {
         const page = stepPage(action);
-        if (segment?.page !== page) {
+        if (segment?.page !== page || intentByIndex[index] !== intentByIndex[index - 1]) {
           const key = JSON.stringify([page, actionKey(action, index)]);
           segment = { key, page, start: index, count: 0 };
           live.add(key);
@@ -265,12 +425,16 @@ if (!window.RecorderStepView) {
     }
     function windowKey(action, index) {
       const key = actionKey(action, index);
-      return isSegmentCollapsed(index) ? `collapsed:${key}` : key;
+      const group = intentByIndex[index];
+      const boundary = group?.start === index ? `intent:${group.id}:${isIntentCollapsed(group)}:` : "";
+      return `${boundary}${isSegmentCollapsed(index) ? "collapsed:" : ""}${key}`;
     }
     function resetStepWindow() {
       visibleIndices = [];
       const keys = [];
       currentActions.forEach((action, index) => {
+        const group = intentByIndex[index];
+        if (isIntentCollapsed(group) && group.start !== index) return;
         if (isSegmentCollapsed(index) && pageSegments[index].start !== index) return;
         visibleIndices.push(index);
         keys.push(windowKey(action, index));
@@ -281,9 +445,12 @@ if (!window.RecorderStepView) {
     function togglePageSegment(entry) {
       const { key } = pageSegments[entry.index];
       const top = entry.card.getBoundingClientRect().top;
-      const offset = top - stepsContainer.getBoundingClientRect().top;
       if (collapsedSegments.has(key)) collapsedSegments.delete(key);
       else collapsedSegments.add(key);
+      renderAroundHeading(entry, top);
+    }
+    function renderAroundHeading(entry, top) {
+      const offset = top - stepsContainer.getBoundingClientRect().top;
       resetStepWindow();
       // Keep the activated heading in view when the scroll range changes.
       const position = visibleIndices.indexOf(entry.index);
@@ -300,19 +467,19 @@ if (!window.RecorderStepView) {
       checkbox.setAttribute("aria-label", label);
       checkbox.title = label;
     }
-    function textSignature(action, desc) {
-      return [action.type || "", action.pageName || "", desc].join("\u0001");
-    }
     function syncStepText(entry, action) {
       const { desc, summary } = describeStep(action);
-      const signature = textSignature(action, desc);
+      const tabLabel = entry.pageTag ? recordingTabLabel(stepPage(action)) : "";
+      const signature = [action.type || "", tabLabel, desc].join("\u0001");
       if (entry.signature === signature) return;
       entry.typeBadge.className = `step-type-badge ${String(action.type || "unknown").toLowerCase()}`;
       entry.typeBadge.textContent = window.StepDocGenerator
         ? window.StepDocGenerator.getActionLabel(action.type)
         : t("actionGeneric", [], "操作");
-      if (entry.pageTag) entry.pageTag.textContent = action.pageName || "page1";
-      entry.description.textContent = !readOnly && summary ? summary : desc;
+      if (entry.pageTag) entry.pageTag.textContent = tabLabel;
+      // The type badge already names the action, so both views show the short
+      // summary and keep the full sentence in the tooltip.
+      entry.description.textContent = summary || desc;
       entry.description.title = desc;
       entry.signature = signature;
     }
@@ -320,27 +487,31 @@ if (!window.RecorderStepView) {
       if (!entry?.pageHeading) return;
       const action = currentActions[index];
       const page = stepPage(action);
-      const pageNumber = Number(/^page(\d+)$/.exec(page)?.[1]) || 1;
-      entry.card.dataset.pageTone = (pageNumber - 1) % 4;
+      const pageNumber = Number(/^page(\d+)$/.exec(page)?.[1]);
+      // A golden-angle step keeps neighboring numbered tabs visibly distinct.
+      const hueOffset = Number.isSafeInteger(pageNumber) && pageNumber > 0
+        ? (pageNumber - 1) * 137.508 : hashText(page);
+      entry.card.style.setProperty("--step-page-hue", String((pageHueSeed + hueOffset) % 360));
       const { start, count } = pageSegments[index];
       const collapsed = isSegmentCollapsed(index);
       entry.card.classList.toggle("is-page-collapsed", collapsed);
       entry.pageHeading.hidden = index !== start;
       if (entry.pageHeading.hidden) return;
+      const tabLabel = recordingTabLabel(page);
       const toggleLabel = collapsed
-        ? t("expandPageSteps", [page, count], `展开 ${page}（${count} 步）`)
-        : t("collapsePageSteps", [page, count], `折叠 ${page}（${count} 步）`);
+        ? t("expandPageSteps", [tabLabel, count], `展开 ${tabLabel}（${count} 步）`)
+        : t("collapsePageSteps", [tabLabel, count], `折叠 ${tabLabel}（${count} 步）`);
       entry.pageToggle.setAttribute("aria-expanded", String(!collapsed));
       entry.pageToggle.setAttribute("aria-label", toggleLabel);
       entry.pageToggle.title = toggleLabel;
       entry.pageCount.textContent = String(count);
-      const title = action.title || "";
-      if (entry.pageName.textContent === page && entry.pageTitle.textContent === title) return;
-      entry.pageName.textContent = page;
+      const title = String(action.title || "").trim();
+      if (entry.pageName.textContent === tabLabel && entry.pageTitle.textContent === title) return;
+      entry.pageName.textContent = tabLabel;
       entry.pageTitle.textContent = title;
       entry.pageTitle.hidden = !title;
-      entry.pageHeading.title = title ? `${page} · ${title}` : page;
-      const label = t("selectPageSteps", [page], `选择 ${page} 的所有步骤`);
+      entry.pageHeading.title = title ? `${title} · ${tabLabel}` : tabLabel;
+      const label = t("selectPageSteps", [tabLabel], `选择 ${tabLabel} 的所有步骤`);
       entry.pageCheckbox.setAttribute("aria-label", label);
       entry.pageCheckbox.title = label;
     }
@@ -363,7 +534,7 @@ if (!window.RecorderStepView) {
         pageCheckbox.className = "selection-checkbox step-page-checkbox";
         pageName.className = "step-page-name";
         pageTitle.className = "step-page-title";
-        pageLabel.append(pageName, pageTitle);
+        pageLabel.append(pageTitle, pageName);
         pageToggle.type = "button";
         pageToggle.className = "step-page-toggle";
         pageToggle.innerHTML = iconSvg("chevronRight", 14);
@@ -371,7 +542,7 @@ if (!window.RecorderStepView) {
         pageHeading.append(pageCheckbox, pageLabel, pageToggle);
         card.append(pageHeading);
       }
-      const checkbox = readOnly ? null : document.createElement("input");
+      const checkbox = selectable ? document.createElement("input") : null;
       if (checkbox) {
         card.classList.add("has-selection");
         checkbox.type = "checkbox";
@@ -482,13 +653,22 @@ if (!window.RecorderStepView) {
         event.stopPropagation();
         deleteStep(entry.index).catch(error => reportError(error.message));
       });
+      checkbox?.addEventListener("click", event => { shiftToggle = event.shiftKey; });
       checkbox?.addEventListener("change", () => {
-        if (checkbox.checked && entry.actionId) selectedActionIds.add(entry.actionId);
-        else selectedActionIds.delete(entry.actionId);
+        const from = shiftToggle && Number.isInteger(selectionAnchor) ? Math.min(selectionAnchor, entry.index) : entry.index;
+        const to = shiftToggle && Number.isInteger(selectionAnchor) ? Math.max(selectionAnchor, entry.index) : entry.index;
+        for (let index = from; index <= to; index++) {
+          const id = currentActions[index]?.id;
+          if (!id) continue;
+          if (checkbox.checked) selectedActionIds.add(id);
+          else selectedActionIds.delete(id);
+        }
+        shiftToggle = false;
+        selectionAnchor = entry.index;
         refreshSelection();
       });
       pageCheckbox?.addEventListener("change", () => {
-        const page = pageSelections.get(entry.pageName.textContent);
+        const page = pageSelections.get(pageSegments[entry.index].page);
         for (const id of page.ids) {
           if (pageCheckbox.checked) selectedActionIds.add(id);
           else selectedActionIds.delete(id);
@@ -535,6 +715,7 @@ if (!window.RecorderStepView) {
       const wasNearBottom = stepsContainer.scrollHeight - stepsContainer.scrollTop - stepsContainer.clientHeight <= 120;
       const appended = count > currentActions.length;
       currentActions = actions;
+      pageHueSeed = hashText(workspaceContext.workspaceDraftId || actions[0]?.id || actions[0]?.url || "");
       currentCapture = capture;
       if (stepCountBadge) stepCountBadge.textContent = count;
       if (emptyState) emptyState.style.display = count > 0 ? "none" : "flex";
@@ -547,6 +728,9 @@ if (!window.RecorderStepView) {
       for (const key of expansionOverrides.keys()) if (!liveKeys.has(key)) expansionOverrides.delete(key);
       resizeObserver.observe(stepsContainer);
       updateSelection();
+      // Steps may have been added or removed, which moves the selected indices.
+      notifySelectionSoon();
+      updateIntentGroups();
       updatePageSegments();
       resetStepWindow();
       renderWindow();
@@ -561,6 +745,7 @@ if (!window.RecorderStepView) {
       const range = count > 200 ? virtualWindow.range(scrollTop - noteHeight(), stepsContainer.clientHeight)
         : { start: 0, end: count, before: 0, after: 0 };
       const seen = new Set();
+      const seenGroups = new Set();
       // The empty state anchors the first card; with screenshots off the note takes
       // that place, so cards can never end up above the explanation for them.
       let cursor = emptyState?.parentElement === stepsContainer
@@ -575,9 +760,11 @@ if (!window.RecorderStepView) {
         if (cursor) cursor.after(topSpacer); else stepsContainer.prepend(topSpacer);
         cursor = topSpacer;
       } else topSpacer.remove();
+      let groupCursor = null;
       for (let position = range.start; position < range.end; position++) {
         const index = visibleIndices[position];
         const action = actions[index];
+        const group = intentByIndex[index];
         const key = actionKey(action, index);
         seen.add(key);
         let entry = cardEntries.get(key);
@@ -587,25 +774,55 @@ if (!window.RecorderStepView) {
           resizeObserver.observe(entry.card);
         }
         entry.card.dataset.virtualKey = windowKey(action, index);
+        entry.card.dataset.stepIndex = String(index);
         syncStepText(entry, action);
         syncPageHeading(entry, index);
         entry.actionId = action.id || null;
+        if (entry.index !== index) {
+          entry.stepIndex.textContent = String(index + 1);
+          entry.index = index;
+        }
         if (entry.checkbox) describeSelectionCheckbox(entry.checkbox, index);
         syncSelection(entry);
         const resolvedCaptureState = globalThis.RecorderCaptureState.resolve(action, capture);
         ctx.syncMedia(entry, action, index, resolvedCaptureState);
         ctx.syncCaptureState(entry, action, resolvedCaptureState);
-        if (entry.index !== index) {
-          entry.stepIndex.textContent = String(index + 1);
-          entry.index = index;
+        if (group) {
+          let section = intentSections.get(group.key);
+          if (!section) {
+            section = document.createElement("section");
+            section.className = "step-intent-group";
+            intentSections.set(group.key, section);
+          }
+          if (!seenGroups.has(group.key)) {
+            seenGroups.add(group.key);
+            section.setAttribute("aria-label", group.label);
+            section.classList.toggle("is-intent-collapsed", isIntentCollapsed(group));
+            section.classList.toggle("is-intent-start", index === group.start);
+            if (section.parentElement !== stepsContainer || section.previousElementSibling !== cursor) {
+              if (cursor) cursor.after(section); else stepsContainer.prepend(section);
+            }
+            groupCursor = null;
+          }
+          if (entry.card.parentElement !== section || entry.card.previousElementSibling !== groupCursor) {
+            if (groupCursor) groupCursor.after(entry.card); else section.prepend(entry.card);
+          }
+          groupCursor = entry.card;
+          const segment = pageSegments[index];
+          const visibleEnd = isSegmentCollapsed(index) ? segment.start + segment.count - 1 : index;
+          section.classList.toggle("is-intent-end", isIntentCollapsed(group) || visibleEnd === group.end);
+          cursor = section;
+        } else {
+          if (entry.card.parentElement !== stepsContainer || entry.card.previousElementSibling !== cursor) {
+            if (cursor) cursor.after(entry.card); else stepsContainer.prepend(entry.card);
+          }
+          cursor = entry.card;
         }
-        const expectedPrevious = cursor;
-        if (entry.card.previousElementSibling !== expectedPrevious || !entry.card.isConnected) {
-          if (expectedPrevious) expectedPrevious.after(entry.card);
-          else stepsContainer.prepend(entry.card);
-        }
-        cursor = entry.card;
         entry.card.classList.toggle("is-last-step", index === actions.length - 1);
+        entry.card.classList.toggle("is-intent-highlighted", Boolean(highlightedRange
+          && index >= highlightedRange.start && index <= highlightedRange.end));
+        syncIntentMarker(entry, index);
+        syncIntentEndMarker(entry, index);
       }
       if (range.after) {
         if (cursor) cursor.after(bottomSpacer); else stepsContainer.append(bottomSpacer);
@@ -617,6 +834,11 @@ if (!window.RecorderStepView) {
         resizeObserver.unobserve(entry.card);
         entry.card.remove();
         cardEntries.delete(key);
+      }
+      for (const [id, section] of intentSections) {
+        if (seenGroups.has(id)) continue;
+        section.remove();
+        intentSections.delete(id);
       }
     }
     function updateCaptureState(capture) {
@@ -638,6 +860,7 @@ if (!window.RecorderStepView) {
       updateCaptureState(capture);
       if (pageChanged) {
         updateSelection();
+        notifySelectionSoon();
         updatePageSegments();
         resetStepWindow();
         renderWindow();
@@ -665,8 +888,12 @@ if (!window.RecorderStepView) {
       currentActions = [];
       pageSegments = [];
       visibleIndices = [];
+      intentByIndex = [];
+      lastIntentGroup = null;
+      stepsContainer.classList.remove("has-intent-groups");
       currentCapture = {};
       firstRender = true;
+      highlightedRange = null;
       ctx.getObserver()?.disconnect();
       ctx.setObserver(null);
       for (const entry of cardEntries.values()) {
@@ -675,6 +902,9 @@ if (!window.RecorderStepView) {
         entry.card.remove();
       }
       cardEntries.clear();
+      for (const section of intentSections.values()) section.remove();
+      intentSections.clear();
+      intentExpansion.clear();
       selectedActionIds.clear();
       pageSelections.clear();
       collapsedSegments.clear();
@@ -697,8 +927,49 @@ if (!window.RecorderStepView) {
       });
     });
     return { dispose, renderSteps, patchSteps, updateCaptureState, setRecording, setScreenshotsExpandedDefault,
+      selectedIndices,
+      /** Selected step ids, for callers that must re-resolve them against fresh data. */
+      selectedIds: () => selectedIndices().map(index => currentActions[index].id),
+      clearSelection() {
+        if (!selectedActionIds.size) return;
+        selectedActionIds.clear();
+        selectionAnchor = null;
+        refreshSelection();
+      },
+      setSelectionListener(listener) {
+        selectionListener = listener;
+        listener?.(selectedIndices());
+      },
+      setIntentGroups(steps, onEdit) {
+        intentSteps = steps;
+        markerEditHandler = onEdit;
+      },
+      highlightRange(start, end, revealIndex) {
+        highlightedRange = Number.isInteger(start) && Number.isInteger(end) ? { start, end } : null;
+        const position = visibleIndices.indexOf(revealIndex);
+        if (position >= 0 && visibleIndices.length > 200) {
+          stepsContainer.scrollTop = virtualWindow.offsetAt(position) + noteHeight();
+        }
+        renderWindow();
+        if (position >= 0) {
+          const card = cardEntries.get(actionKey(currentActions[revealIndex], revealIndex))?.card;
+          card?.scrollIntoView({ block: "nearest", inline: "nearest", container: "nearest" });
+        }
+      },
+      setStepMarker: (provider, onEdit = markerEditHandler) => {
+        markerProvider = provider;
+        markerEditHandler = onEdit;
+        renderWindow();
+      },
+      setStepEndMarker: provider => {
+        endMarkerProvider = provider;
+        renderWindow();
+      },
       setWorkspaceContext: value => {
-        if (workspaceContext.workspaceDraftId !== value?.workspaceDraftId) collapsedSegments.clear();
+        if (workspaceContext.workspaceDraftId !== value?.workspaceDraftId) {
+          collapsedSegments.clear();
+          intentExpansion.clear();
+        }
         workspaceContext = value || {};
       } };
   }

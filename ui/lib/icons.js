@@ -1,5 +1,6 @@
 /** Local, consistent interface icons. Names and markup are static. */
 const shapes = Object.freeze({
+  annotation: '<path d="M4 4h16v12H9l-5 4zM8 8h8m-8 4h5"/>',
   document: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/>',
   arrowRight: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
   chevronRight: '<path d="m9 18 6-6-6-6"/>',

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="styles/console.css">
   <link rel="stylesheet" href="styles/theme-refresh.css">
   <link rel="stylesheet" href="styles/workbench-page.css">
+  <link rel="stylesheet" href="styles/intent.css">
 </head>
 <body>
   <div class="console-container">
@@ -100,17 +101,30 @@
 
       <section class="console-panel preview-panel" id="preview-panel" hidden>
         <div class="panel-head">
-          <button class="btn btn-secondary btn-compact" id="preview-back-btn" data-i18n="backToCaseManagement">返回用例管理</button>
+          <button class="btn btn-secondary" id="preview-back-btn" data-i18n="backToCaseManagement">返回用例管理</button>
           <h2 id="preview-title"></h2>
           <div class="panel-head-actions">
             <span class="badge" id="preview-step-count">0</span>
-            <button type="button" class="btn btn-primary btn-compact" id="preview-continue-btn" data-i18n="continueRecording">继续录制</button>
+            <button type="button" class="btn btn-secondary" id="preview-intent-btn" aria-controls="preview-intent-pane"
+              aria-expanded="false" data-i18n="intentAnnotationTitle">标注意图</button>
+            <button type="button" class="btn btn-primary" id="preview-continue-btn" data-i18n="continueRecording">继续录制</button>
           </div>
         </div>
         <div class="preview-workspace preview-subview" id="preview-steps-view">
           <div class="steps-container" id="preview-steps-container">
             <div class="empty-state" id="preview-empty-state" style="display:none"><p data-i18n="noSteps">暂无录制步骤。</p></div>
           </div>
+          <aside id="preview-intent-pane" class="preview-intent-pane" aria-label="标注意图" data-i18n-aria-label="intentAnnotationTitle" hidden>
+            <div class="preview-intent-overview">
+              <header class="preview-intent-header">
+                <h3 id="preview-intent-title" data-i18n="intentAnnotationTitle">标注意图</h3>
+                <button type="button" class="btn btn-secondary btn-compact" id="preview-add-intent-btn"
+                  data-i18n="intentNewStep">新增测试步骤</button>
+              </header>
+              <p class="preview-intent-empty" data-i18n="intentPreviewEmpty">选择录制范围，为一组操作填写测试目标和验证点。</p>
+              <ul class="intent-picker-list" id="preview-intent-list"></ul>
+            </div>
+          </aside>
         </div>
       </section>
     </main>
@@ -119,17 +133,15 @@
 
   <div class="target-tab-modal" id="target-tab-modal" hidden>
     <div class="target-tab-dialog" role="dialog" aria-modal="true" aria-labelledby="target-tab-title">
-      <div class="target-tab-dialog-head">
-        <div>
-          <h2 id="target-tab-title" data-i18n="selectTargetPage">选择继续录制的页面</h2>
-          <p data-i18n="selectTargetPageHint">请选择要打开侧边栏并继续录制的页面。</p>
-        </div>
-        <button type="button" class="icon-btn" id="target-tab-close" data-i18n-aria-label="cancel" aria-label="取消"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      <div class="target-tab-dialog-head confirm-content">
+        <h3 id="target-tab-title" data-i18n="selectTargetPage">选择继续录制的页面</h3>
+        <p data-i18n="selectTargetPageHint">请选择要打开侧边栏并继续录制的页面。</p>
       </div>
       <div class="target-tab-list" id="target-tab-list"></div>
-      <div class="target-tab-actions">
-        <button type="button" class="btn btn-secondary" id="target-tab-cancel" data-i18n="cancel">取消</button>
-        <button type="button" class="btn btn-primary" id="target-tab-confirm" disabled data-i18n="continueRecording">继续录制</button>
+      <p class="target-tab-empty" id="target-tab-empty" data-i18n="noRecordablePages" hidden>没有可录制的网页。请先在浏览器中打开要录制的 http 或 https 页面。</p>
+      <div class="target-tab-actions confirm-actions">
+        <button type="button" class="target-tab-cancel" id="target-tab-cancel" data-i18n="cancel">取消</button>
+        <button type="button" class="target-tab-submit" id="target-tab-confirm" disabled data-i18n="continueRecording">继续录制</button>
       </div>
     </div>
   </div>

@@ -4,9 +4,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const { strFromU8, unzipSync } = require("fflate");
+const { strFromU8, strToU8, unzipSync } = require("fflate");
 
-function loadExport(blobs, settings = {}) {
+function loadExport(blobs, settings = {}, generator = { generate: () => "# Recorded workflow\n" }) {
   let downloaded = null;
   const anchor = {
     click() {},
@@ -33,7 +33,7 @@ function loadExport(blobs, settings = {}) {
     fflate: require("fflate"),
     RecorderI18n: { t: (key, subs, fallback) => fallback },
     RecorderBridge: { getBlob: async key => blobs.get(key) || null },
-    StepDocGenerator: { generate: () => "# Recorded workflow\n" }
+    StepDocGenerator: generator
   };
   context.globalThis = context;
   vm.createContext(context);

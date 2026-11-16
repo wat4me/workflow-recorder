@@ -1,24 +1,32 @@
 /* ── Buttons ── */
-/* Shared feedback also covers menu items, tabs and dialog buttons, without
-   changing their layout or overriding selected/success state colors. */
+/* One button system for the side panel, the workbench and every dialog.
+
+   Sizes: --control-h (32px) for page toolbars and dialog footers,
+   --control-h-sm (28px, .btn-compact) for actions inside a list or section head.
+   Variants: default (neutral outline), .btn-primary/.btn-accent (filled accent),
+   .btn-danger (danger outline). The only filled danger button is the confirm
+   button of a destructive dialog.
+   Hover changes the surface only: no lift and no shadow, so a row of mixed
+   buttons never jumps. */
+:root {
+  --control-h: 32px;
+  --control-h-sm: 28px;
+  --control-radius: var(--radius-sm);
+}
 button {
   transition: background-color 150ms ease, border-color 150ms ease,
-    color 150ms ease, box-shadow 150ms ease, translate 150ms ease;
+    color 150ms ease, box-shadow 150ms ease;
 }
-
 button:enabled:hover {
-  box-shadow: inset 0 0 0 100vmax var(--control-hover-overlay), var(--shadow-sm);
+  box-shadow: inset 0 0 0 100vmax var(--control-hover-overlay);
 }
-
 button:enabled:active {
   box-shadow: inset 0 0 0 100vmax var(--control-pressed-overlay);
 }
-
 button:enabled:focus-visible {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
 }
-
 .btn {
   display: inline-flex;
   align-items: center;
@@ -27,20 +35,24 @@ button:enabled:focus-visible {
   border: 1px solid var(--button-border, var(--border-color));
   background: var(--button-bg, var(--bg-primary));
   color: var(--button-text, var(--text-secondary));
-  box-shadow: var(--shadow-xs);
-  border-radius: var(--radius-md);
+  box-shadow: none;
+  border-radius: var(--control-radius);
   font-family: inherit;
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
   width: 100%;
-  padding: 8px 14px;
-  letter-spacing: -0.01em;
+  padding: 0 14px;
+  letter-spacing: 0;
   line-height: 1;
-  min-height: 34px;
+  min-height: var(--control-h);
   vertical-align: middle;
 }
-
+.btn-compact {
+  min-height: var(--control-h-sm);
+  padding: 0 10px;
+  font-size: 12px;
+}
 .btn > span:not(.btn-icon),
 .btn .btn-label {
   display: inline-flex;
@@ -49,7 +61,9 @@ button:enabled:focus-visible {
   min-height: 16px;
   line-height: 1;
 }
-
+.btn > span[hidden] {
+  display: none;
+}
 .btn-icon {
   display: inline-flex;
   align-items: center;
@@ -58,47 +72,28 @@ button:enabled:focus-visible {
   height: 16px;
   flex: 0 0 16px;
 }
-
 .btn svg,
 .icon-btn svg {
   display: block;
 }
-
 :is(.btn, .icon-btn):disabled {
-  opacity: 0.35;
+  opacity: 0.45;
   cursor: not-allowed;
   box-shadow: none;
 }
-
 :is(.btn, .icon-btn):enabled:hover {
-  background: var(--button-hover-bg, var(--accent-light));
-  border-color: var(--button-hover-border, var(--accent-color));
-  color: var(--button-hover-text, var(--button-text, var(--accent-color)));
-  translate: 0 -1px;
+  background: var(--button-hover-bg, var(--bg-hover));
+  border-color: var(--button-hover-border, var(--border-hover));
+  color: var(--button-hover-text, var(--text-primary));
 }
-
-:is(.btn, .icon-btn):enabled:active {
-  translate: 0 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  button {
-    transition: none;
-  }
-
-  :is(.btn, .icon-btn):enabled:hover {
-    translate: none;
-  }
-}
-
 .btn-secondary.success {
   --button-bg: var(--success-light);
   --button-text: var(--success-text);
   --button-border: var(--success-border);
   --button-hover-bg: var(--success-subtle);
   --button-hover-border: var(--success-text);
+  --button-hover-text: var(--success-text);
 }
-
 .btn-primary.start-state {
   --button-bg: #16a34a;
   --button-text: #ffffff;
@@ -106,25 +101,30 @@ button:enabled:focus-visible {
   --button-hover-bg: #15803d;
   --button-hover-text: #ffffff;
   --button-hover-border: #15803d;
-  box-shadow: 0 2px 6px rgba(22, 163, 74, 0.2);
 }
-
-.btn-primary.recording-state,
-.btn-danger {
+/* Stop recording: a live state, so it keeps a tinted surface. */
+.btn-primary.recording-state {
   --button-bg: var(--danger-light);
   --button-text: var(--danger-color);
   --button-border: var(--danger-border);
   --button-hover-bg: var(--danger-subtle);
   --button-hover-border: var(--danger-color);
+  --button-hover-text: var(--danger-color);
 }
-
+.btn-danger {
+  --button-bg: var(--bg-primary);
+  --button-text: var(--danger-color);
+  --button-border: var(--danger-border);
+  --button-hover-bg: var(--danger-light);
+  --button-hover-border: var(--danger-color);
+  --button-hover-text: var(--danger-color);
+}
 .btn-primary.recording-state .btn-icon {
   animation: pulse-icon 1.6s infinite ease-in-out;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
-
 .btn-accent {
   --button-bg: var(--accent-fill);
   --button-text: #ffffff;
@@ -132,9 +132,34 @@ button:enabled:focus-visible {
   --button-hover-bg: var(--accent-hover);
   --button-hover-text: #ffffff;
   --button-hover-border: var(--accent-hover);
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.18);
 }
-
+/* A pressed toggle (the workbench's annotation pane). */
+.btn[aria-expanded="true"].is-active {
+  --button-bg: var(--accent-light);
+  --button-border: var(--accent-subtle);
+  --button-text: var(--accent-color);
+  --button-hover-bg: var(--accent-light);
+  --button-hover-border: var(--accent-color);
+  --button-hover-text: var(--accent-color);
+}
+/* Borderless icon actions inside rows: list items, folders, menus. */
+.ghost-btn,
+.library-item-btn,
+.case-folder-add,
+.case-folder-more {
+  border: 0;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: var(--text-muted);
+}
+:is(.ghost-btn, .library-item-btn, .case-folder-add, .case-folder-more):enabled:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.library-item-btn.delete:enabled:hover {
+  background: var(--danger-light);
+  color: var(--danger-color);
+}
 /* ── Recording controls ── */
 .recorder-header {
   display: grid;
@@ -182,8 +207,8 @@ button:enabled:focus-visible {
 
 .header-record-actions .btn {
   min-width: 0;
-  min-height: 36px;
-  padding: 8px 10px;
+  min-height: var(--control-h);
+  padding: 0 10px;
   font-size: 12px;
   white-space: nowrap;
 }
@@ -209,7 +234,7 @@ button:enabled:focus-visible {
 
 .header-record-actions .manual-screenshot-btn.icon-only,
 .header-record-actions .compact-download-btn.icon-only {
-  width: 36px;
+  width: var(--control-h);
   padding: 0;
 }
 
@@ -226,8 +251,8 @@ button:enabled:focus-visible {
 }
 
 .header-record-actions .more-actions-btn {
-  width: 36px;
-  height: 36px;
+  width: var(--control-h);
+  height: var(--control-h);
 }
 
 .more-actions-btn[hidden],
@@ -275,6 +300,14 @@ button:enabled:focus-visible {
 .more-action:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.more-action.danger {
+  color: var(--danger-color);
+}
+
+.more-action.danger:hover:not(:disabled) {
+  background: var(--danger-light);
 }
 
 /* A narrow side panel gets one compact toolbar row so the step list retains as

@@ -12,9 +12,121 @@
   const { escapeHtml } = globalThis.RecorderDom;
 
   /**
-   * Non-blocking status message. Styling is inline so this works on both panel
-   * pages without either stylesheet having to know about it.
+   * Every modal shares one keyboard and focus contract: Escape dismisses the
+   * topmost modal only, Tab stays inside it, the page behind it is inert, and
+   * focus returns to the control that opened it.
    */
+  const modalStack = [];
+  let lastFocused = null;
+  document.addEventListener("focusin", event => { lastFocused = event.target; }, true);
+  const FOCUSABLE = "a[href], button, input, select, textarea, summary, [tabindex]";
+
+  function focusableIn(root) {
+    return [...root.querySelectorAll(FOCUSABLE)].filter(element => {
+      if (element.disabled || (element.tabIndex < 0 && !element.matches("summary"))) return false;
+      // Content of a collapsed <details> is not reachable; its own summary is.
+      const collapsed = element.closest("details:not([open])");
+      if (collapsed && !(element.matches("summary") && element.parentElement === collapsed)) return false;
+      return element.getClientRects().length > 0;
+    });
+  }
+
+  function trapFocus(event, root) {
+    const focusable = focusableIn(root);
+    if (!focusable.length) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    const active = document.activeElement;
+    if (!root.contains(active)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey ? active === first : active === last) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    }
+  }
+
+  document.addEventListener("keydown", event => {
+    const top = modalStack.at(-1);
+    if (!top) return;
+    if (event.key === "Escape" && !event.isComposing) {
+      // Capture phase plus stopPropagation: page-level Escape handlers (menus,
+      // panels) must not also act on the key that closed the modal.
+      event.preventDefault();
+      event.stopPropagation();
+      top.dismiss();
+      return;
+    }
+    if (event.key === "Tab") trapFocus(event, top.overlay);
+    top.onKeyDown?.(event);
+  }, true);
+
+  /**
+   * Shows `overlay` as a modal. Returns `close()`, which hides it, re-enables
+   * the page and restores focus. `onDismiss` runs for Escape and, unless
+   * `dismissOnBackdrop` is false, for a click on the backdrop.
+   */
+  function openModal(overlay, { onDismiss, dismissOnBackdrop = true, onKeyDown = null, remove = true } = {}) {
+    // A button that disables itself while it prepares the dialog has already
+    // dropped focus to <body>; it is still the control the user pressed.
+    const active = document.activeElement;
+    const trigger = active && active !== document.body ? active : lastFocused;
+    const background = [...document.body.children].filter(element => element !== overlay && !element.inert
+      && !element.matches(".recorder-toast-stack"));
+    for (const element of background) element.inert = true;
+    const entry = { overlay, dismiss: () => onDismiss?.(), onKeyDown };
+    modalStack.push(entry);
+
+    // A press that starts inside the dialog and ends on the backdrop (selecting
+    // text, dragging a slider) is not a backdrop click.
+    let pressedBackdrop = false;
+    const onPointerDown = event => { pressedBackdrop = event.target === overlay; };
+    const onClick = event => {
+      if (dismissOnBackdrop && pressedBackdrop && event.target === overlay) onDismiss?.();
+      pressedBackdrop = false;
+    };
+    overlay.addEventListener("pointerdown", onPointerDown);
+    overlay.addEventListener("click", onClick);
+    if (!overlay.isConnected) document.body.appendChild(overlay);
+
+    let closed = false;
+    return function close({ restoreFocus = true } = {}) {
+      if (closed) return;
+      closed = true;
+      overlay.removeEventListener("pointerdown", onPointerDown);
+      overlay.removeEventListener("click", onClick);
+      const index = modalStack.indexOf(entry);
+      if (index >= 0) modalStack.splice(index, 1);
+      const focusInside = overlay.contains(document.activeElement);
+      if (remove) overlay.remove();
+      for (const element of background) element.inert = false;
+      if (restoreFocus && (focusInside || focusLost())) returnFocus(trigger);
+    };
+  }
+
+  const focusLost = () => !document.activeElement || document.activeElement === document.body;
+
+  /** Focuses `element` now, or as soon as its busy state ends if it is disabled. */
+  function returnFocus(element) {
+    if (!element?.isConnected) return;
+    if (!element.disabled) {
+      element.focus({ preventScroll: true });
+      return;
+    }
+    const observer = new MutationObserver(() => {
+      if (element.disabled) return;
+      observer.disconnect();
+      clearTimeout(timer);
+      if (element.isConnected && focusLost()) element.focus({ preventScroll: true });
+    });
+    const timer = setTimeout(() => observer.disconnect(), 10000);
+    observer.observe(element, { attributes: true, attributeFilter: ["disabled"] });
+  }
+
+  /** Non-blocking status message. Styled by `.recorder-toast` with the page theme tokens. */
   function notify(message, { danger = false, timeoutMs = 4000 } = {}) {
     if (!message) return;
     let stack = document.querySelector(".recorder-toast-stack");
@@ -23,21 +135,12 @@
       stack.className = "recorder-toast-stack";
       stack.setAttribute("role", "status");
       stack.setAttribute("aria-live", "polite");
-      stack.style.cssText = "position:fixed;top:16px;left:12px;right:12px;z-index:2147483647;"
-        + "display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;";
       document.body.appendChild(stack);
     }
 
     const toast = document.createElement("div");
     toast.className = `recorder-toast${danger ? " danger" : ""}`;
     toast.textContent = String(message);
-    toast.style.cssText = "pointer-events:auto;width:fit-content;max-width:min(520px,calc(100vw - 24px));"
-      + "padding:10px 14px;border-radius:10px;border:1px solid;"
-      + "font:500 13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
-      + "box-shadow:0 10px 30px rgba(15,23,42,.16);word-break:break-word;"
-      + `background:${danger ? "#fef2f2" : "#f0fdf4"};`
-      + `border-color:${danger ? "#fecaca" : "#bbf7d0"};`
-      + `color:${danger ? "#991b1b" : "#166534"};`;
     stack.appendChild(toast);
 
     const remove = () => {
@@ -86,25 +189,17 @@
       const cancelButton = overlay.querySelector(".confirm-cancel");
       const submitButton = overlay.querySelector(".confirm-submit");
 
+      // Escape cancels. Enter is left to the focused button: the default focus
+      // is Cancel, so a global Enter handler used to confirm the very deletion
+      // the user was backing out of.
       const finish = result => {
-        document.removeEventListener("keydown", onKeyDown);
-        overlay.remove();
+        close();
         resolve(result);
       };
-      const onKeyDown = event => {
-        // Escape cancels. Enter is left to the focused button: the default focus
-        // is Cancel, so a global Enter handler used to confirm the very deletion
-        // the user was backing out of.
-        if (event.key === "Escape") finish(false);
-      };
+      const close = openModal(overlay, { onDismiss: () => finish(false) });
 
       cancelButton.addEventListener("click", () => finish(false));
       submitButton.addEventListener("click", () => finish(true));
-      overlay.addEventListener("click", event => {
-        if (event.target === overlay) finish(false);
-      });
-      document.addEventListener("keydown", onKeyDown);
-      document.body.appendChild(overlay);
       cancelButton.focus();
     });
   }
@@ -210,8 +305,7 @@
       }
 
       const finish = result => {
-        document.removeEventListener("keydown", onKeyDown);
-        overlay.remove();
+        close();
         resolve(result);
       };
       const submit = () => {
@@ -228,23 +322,17 @@
         else finish(picker ? { text, selection: picker.value } : text);
       };
       const onKeyDown = event => {
-        // Escape cancels and Enter submits only from the name field. On a focused
-        // button Enter belongs to that button, and an IME composition keeps its
-        // Enter for itself.
-        if (event.key === "Escape" && !event.isComposing) finish(null);
+        // Enter submits only from the name field. On a focused button Enter
+        // belongs to that button, and an IME composition keeps its Enter for itself.
         if (!multiline && event.key === "Enter" && !event.isComposing && event.target === input) {
           event.preventDefault();
           submit();
         }
       };
+      const close = openModal(overlay, { onDismiss: () => finish(null), onKeyDown });
 
       overlay.querySelector(".confirm-cancel").addEventListener("click", () => finish(null));
       overlay.querySelector(".confirm-submit").addEventListener("click", submit);
-      overlay.addEventListener("click", event => {
-        if (event.target === overlay) finish(null);
-      });
-      document.addEventListener("keydown", onKeyDown);
-      document.body.appendChild(overlay);
       (input || checkboxInput || overlay.querySelector(".confirm-submit")).focus();
       input?.select();
     });
@@ -304,27 +392,22 @@
       input.value = defaultName;
       limitNameInput(input);
       const finish = result => {
-        document.removeEventListener("keydown", onKeyDown);
-        overlay.remove();
+        close();
         resolve(result);
       };
       const onKeyDown = event => {
-        // Escape cancels and Enter saves only from the name field, so the other
-        // two buttons keep the action their label promises.
-        if (event.key === "Escape" && !event.isComposing) finish(null);
+        // Enter saves only from the name field, so the other two buttons keep
+        // the action their label promises.
         if (event.key === "Enter" && !event.isComposing && event.target === input) {
+          event.preventDefault();
           finish({ action: "save", name: input.value.trim() });
         }
       };
+      const close = openModal(overlay, { onDismiss: () => finish(null), onKeyDown });
 
       overlay.querySelector(".confirm-cancel").addEventListener("click", () => finish(null));
       overlay.querySelector(".confirm-discard").addEventListener("click", () => finish({ action: "discard" }));
       overlay.querySelector(".confirm-submit").addEventListener("click", () => finish({ action: "save", name: input.value.trim() }));
-      overlay.addEventListener("click", event => {
-        if (event.target === overlay) finish(null);
-      });
-      document.addEventListener("keydown", onKeyDown);
-      document.body.appendChild(overlay);
       input.focus();
       input.select();
     });
@@ -334,6 +417,7 @@
     confirmAction,
     decideRecordingBeforeOpen,
     notify,
+    openModal,
     promptDocumentExport,
     promptText,
     reportError
